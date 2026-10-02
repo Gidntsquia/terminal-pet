@@ -52,12 +52,12 @@ fn main() -> io::Result<()> {
             "--seed" => seed = args.next().and_then(|s| s.parse().ok()).unwrap_or(seed),
             "-h" | "--help" => {
                 println!(
-                    "squid - a giant ASCII squid pet\n\nUSAGE: squid [--ascii] [--seed N]\n\nKeys: f feed, p pet, space play, q/Esc quit"
+                    "squid-pet - a giant ASCII squid pet\n\nUSAGE: squid-pet [--ascii] [--seed N]\n\nKeys: f feed, p pet, space play, q/Esc quit"
                 );
                 return Ok(());
             }
             other => {
-                eprintln!("squid: unknown argument '{other}' (try --help)");
+                eprintln!("squid-pet: unknown argument '{other}' (try --help)");
                 std::process::exit(2);
             }
         }

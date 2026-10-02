@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: cargo build --release
-      - run: tar czf squid-x86_64-linux.tar.gz -C target/release squid
+      - run: tar czf squid-pet-x86_64-linux.tar.gz -C target/release squid-pet
       - uses: softprops/action-gh-release@v2
         with:
-          files: squid-x86_64-linux.tar.gz
+          files: squid-pet-x86_64-linux.tar.gz
