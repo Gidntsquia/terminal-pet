@@ -55,8 +55,14 @@ pub struct App {
     pub next_idle: f32,
     pub next_blink: f32,
     pub quit: bool,
+    /// Horizontal drift: position in -1..=1, current burst (from, to, seconds in).
+    pos: f32,
+    burst: (f32, f32, f32),
+    next_burst: f32,
     rng: StdRng,
 }
+
+const BURST: f32 = 1.8;
 
 fn ease(x: f32) -> f32 {
     let x = x.clamp(0.0, 1.0);
@@ -82,6 +88,9 @@ impl App {
             next_idle,
             next_blink,
             quit: false,
+            pos: 0.0,
+            burst: (0.0, 0.0, BURST),
+            next_burst: 6.0,
             rng,
         }
     }
@@ -156,6 +165,25 @@ impl App {
     pub fn update(&mut self, dt: f32) {
         self.t += dt;
         self.st += dt;
+        // Fish-like drift: mostly still, an occasional short burst to a new spot.
+        if self.burst.2 < BURST {
+            self.burst.2 += dt;
+            self.pos = self.burst.0 + (self.burst.1 - self.burst.0) * ease(self.burst.2 / BURST);
+            if self.burst.2 >= BURST {
+                self.pos = self.burst.1;
+                self.next_burst = self.t + self.rng.random_range(10.0..25.0);
+            }
+        } else if self.t >= self.next_burst {
+            let mut to = self.rng.random_range(-1.0..=1.0f32);
+            if (to - self.pos).abs() < 0.4 {
+                to = if self.pos > 0.0 {
+                    self.pos - 0.6
+                } else {
+                    self.pos + 0.6
+                };
+            }
+            self.burst = (self.pos, to.clamp(-1.0, 1.0), 0.0);
+        }
         if self.st >= Self::duration(self.state) {
             self.state = State::Idle;
             self.msg = None;
@@ -267,15 +295,21 @@ impl App {
         };
         (px + self.wander(), bob + py)
     }
-    /// Slow side-to-side swim across the whole terminal.
+    /// Horizontal offset in cells: rests, then drifts in a short burst.
     pub fn wander(&self) -> f32 {
         let g = geo(self.w, self.h);
         let room = (self.w as f32 / 2.0 - g.maxw * 2.2).max(0.0);
-        room * (self.t * 0.07).sin()
+        room * self.pos
     }
     /// Diagonal lean in columns per row; tilts toward the swim direction.
     pub fn lean(&self) -> f32 {
-        0.2 + 0.4 * (self.t * 0.07).cos()
+        let (from, to, t) = self.burst;
+        let bell = if t < BURST {
+            (std::f32::consts::PI * t / BURST).sin()
+        } else {
+            0.0
+        };
+        0.2 + 0.4 * (to - from).signum() * bell
     }
     /// Food position while feeding.
     pub fn food(&self) -> Option<(f32, f32)> {
@@ -292,6 +326,24 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drift_is_mostly_still_with_short_bursts() {
+        let mut a = App::new(120, 40, 3);
+        let (mut moving, mut bursts, mut last) = (0, 0, a.wander());
+        let mut was = false;
+        for _ in 0..(300 * 16) {
+            a.update(0.0625);
+            let w = a.wander();
+            let m = (w - last).abs() > 1e-4;
+            moving += m as usize;
+            bursts += (m && !was) as usize;
+            was = m;
+            last = w;
+        }
+        assert!(moving < 300 * 16 / 5, "moving {moving}");
+        assert!((5..=30).contains(&bursts), "bursts {bursts}");
+    }
 
     #[test]
     fn keys_start_states_and_return_to_idle() {
