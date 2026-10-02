@@ -1,35 +1,49 @@
-# squid-pet
+# squid-pet 🦑
 
-A full-screen, colored ASCII giant squid pet for your terminal. It fills the window, sways, blinks, and blows bubbles. You can feed it, pet it, and play with it. Nothing is saved.
+<p align="center">
+  <img alt="A red-orange ASCII giant squid filling a terminal window, with hearts floating above it after being petted" src="docs/squid-pet.png">
+</p>
 
-## Quickstart
+A full-screen, colored ASCII giant squid pet for your terminal. It fills the window, sways, blinks, and blows bubbles, and you can feed it, pet it, and play with it. It's written in Rust with [ratatui](https://ratatui.rs) and the colors are based on photos of real giant squid. Nothing is saved between runs.
+
+## Quickstart 🚀
+
+Requires Rust (install it with [rustup](https://rustup.rs)).
 
 ```
-cargo install --path .
+git clone https://github.com/Gidntsquia/squid-pet
+cd squid-pet
+cargo install --path .   # Builds the release binary and puts squid-pet on your PATH
 squid-pet
 ```
 
-Keys: `f` feed, `p` pet, `space` play, `q` / `Esc` / Ctrl-C quit.
+Press `f` to feed, `p` to pet, `space` to play, and `q`, `Esc` or Ctrl-C to quit.
 
-Flags: `--ascii` (no Unicode glyphs), `--seed N` (repeatable run). `NO_COLOR=1` gives monochrome; without `COLORTERM=truecolor` it uses 256 colors. Minimum size 40x12.
+On Linux x86_64 you can skip Rust and download a prebuilt binary from the [releases page](https://github.com/Gidntsquia/squid-pet/releases).
 
-## Build
-
-```
-cargo build --release     # binary at target/release/squid-pet
-```
-
-## Release binary (Linux x86_64)
+Other commands:
 
 ```
-cargo build --release
-tar czf squid-pet-x86_64-linux.tar.gz -C target/release squid-pet
+squid-pet --ascii      # Draws without Unicode glyphs
+squid-pet --seed 42    # Same random behavior every run
+NO_COLOR=1 squid-pet   # Monochrome
 ```
 
-Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds and attaches the same tarball to a GitHub release.
+## Features 🔬
 
-## Tests
+- The squid is drawn procedurally to fit the window and is redrawn when you resize it.
+- Tentacles sway, the body bobs, the eyes blink, and bubbles drift up past seaweed and waves.
+- The squid rests, then swims sideways in short bursts to a new spot.
+- Feeding drops a small fish from the top of the screen; the tentacles grab it and the squid puffs up.
+- Petting closes its eyes, makes it blush, and sends hearts floating up.
+- Playing makes it squirt an ink cloud and dart around the screen.
+- Every so often it yawns, looks around, or lets out a small ink puff on its own.
+- Uses truecolor when the terminal supports it and falls back to 256 colors.
 
-```
-cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --check
-```
+## Documentation 📚
+
+- [Development](docs/Development.md) — code layout, building, releases, tests
+
+## License 📄
+
+[MIT](LICENSE).
