@@ -248,7 +248,7 @@ impl App {
     }
     /// (dx, dy) in cells: play dart offset plus idle bob.
     pub fn offset(&self) -> (f32, f32) {
-        let bob = 1.0 + (self.t * 0.9).sin();
+        let bob = 1.0 + 0.6 * (self.t * 0.35).sin();
         let (px, py) = match self.state {
             State::Playing => {
                 let s = self.st;
@@ -271,11 +271,11 @@ impl App {
     pub fn wander(&self) -> f32 {
         let g = geo(self.w, self.h);
         let room = (self.w as f32 / 2.0 - g.maxw * 2.2).max(0.0);
-        room * (self.t * 0.25).sin()
+        room * (self.t * 0.07).sin()
     }
     /// Diagonal lean in columns per row; tilts toward the swim direction.
     pub fn lean(&self) -> f32 {
-        0.2 + 0.5 * (self.t * 0.25).cos()
+        0.2 + 0.4 * (self.t * 0.07).cos()
     }
     /// Food position while feeding.
     pub fn food(&self) -> Option<(f32, f32)> {
