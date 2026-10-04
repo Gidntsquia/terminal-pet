@@ -1,7 +1,7 @@
 mod app;
 mod art;
 
-use app::{App, State};
+use app::{App, ColorChoice, State, color_list, parse_color, random_preset};
 use crossterm::cursor::{Hide, Show};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
@@ -27,10 +27,7 @@ fn color(mode: Mode, c: Option<art::Rgb>) -> Color {
     match (mode, c) {
         (_, None) | (Mode::Mono, _) => Color::Reset,
         (Mode::True, Some((r, g, b))) => Color::Rgb(r, g, b),
-        (Mode::Indexed, Some((r, g, b))) => {
-            let q = |v: u8| (v as f32 / 255.0 * 5.0).round() as u8;
-            Color::Indexed(16 + 36 * q(r) + 6 * q(g) + q(b))
-        }
+        (Mode::Indexed, Some((r, g, b))) => Color::Indexed(art::to_indexed((r, g, b))),
     }
 }
 
@@ -45,14 +42,43 @@ fn main() -> io::Result<()> {
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(1);
+    let mut choice = ColorChoice::Preset(0);
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
+        let color_arg = if a == "--color" {
+            match args.next() {
+                Some(v) => Some(v),
+                None => {
+                    eprintln!(
+                        "squid-pet: missing value for --color (choose from: {})",
+                        color_list()
+                    );
+                    std::process::exit(2);
+                }
+            }
+        } else {
+            a.strip_prefix("--color=").map(str::to_string)
+        };
+        if let Some(v) = color_arg {
+            match parse_color(&v) {
+                Some(c) => choice = c,
+                None => {
+                    eprintln!(
+                        "squid-pet: unknown color '{v}' (choose from: {})",
+                        color_list()
+                    );
+                    std::process::exit(2);
+                }
+            }
+            continue;
+        }
         match a.as_str() {
             "--ascii" => ascii = true,
             "--seed" => seed = args.next().and_then(|s| s.parse().ok()).unwrap_or(seed),
             "-h" | "--help" => {
                 println!(
-                    "squid-pet - a giant ASCII squid pet\n\nUSAGE: squid-pet [--ascii] [--seed N]\n\nKeys: f feed, p pet, space play, q/Esc quit"
+                    "squid-pet - a giant ASCII squid pet\n\nUSAGE: squid-pet [--ascii] [--seed N] [--color NAME]\n\n  --color NAME  body color: {}\n\nKeys: f feed, p pet, space play, c color, q/Esc quit",
+                    color_list()
                 );
                 return Ok(());
             }
@@ -79,7 +105,7 @@ fn main() -> io::Result<()> {
     }));
     enable_raw_mode()?;
     execute!(stdout(), EnterAlternateScreen, Hide)?;
-    let res = run(ascii, seed, mode);
+    let res = run(ascii, seed, mode, choice);
     restore();
     res
 }
@@ -106,10 +132,15 @@ fn draw(
     Ok(())
 }
 
-fn run(ascii: bool, seed: u64, mode: Mode) -> io::Result<()> {
+fn run(ascii: bool, seed: u64, mode: Mode, choice: ColorChoice) -> io::Result<()> {
     let mut term = Terminal::new(CrosstermBackend::new(stdout()))?;
     let size = term.size()?;
     let mut app = App::new(size.width, size.height, seed);
+    app.mono = mode == Mode::Mono;
+    match choice {
+        ColorChoice::Preset(i) => app.init_color(i, false),
+        ColorChoice::Random => app.init_color(random_preset(seed), !app.mono),
+    }
     let mut last = Instant::now();
     let mut next = last;
     draw(&mut term, &app, ascii, mode)?;
@@ -123,6 +154,12 @@ fn run(ascii: bool, seed: u64, mode: Mode) -> io::Result<()> {
                         KeyCode::Char('q') | KeyCode::Esc => app.quit = true,
                         KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                             app.quit = true
+                        }
+                        KeyCode::Char('c') | KeyCode::Char('C') => {
+                            if !app.mono {
+                                app.next_color();
+                                force = true
+                            }
                         }
                         KeyCode::Char('f') | KeyCode::Char('F') => {
                             app.start(State::Feeding);
