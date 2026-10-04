@@ -17,3 +17,10 @@ Release CI workflow written, not run. Not a git repo (no commits made).
 - Squid widened (mantle ~35 cols at 120x40, arms spread ~90), sheared into a diagonal lean, and swims side to side across the terminal (wander + lean in app.rs). Seen in tmux 120x40 at t=1s and t=7s: it moved ~15 cols and tilt changed. Not watched at other sizes live; tests pass at 5 sizes.
 - Spec deviation (user wins): "horizontally centered" no longer holds while it wanders; the center test tolerance is now w/3.
 - test/clippy/fmt pass. Launch: `. ~/.cargo/env; cargo run --release`.
+
+## Round 3: --color presets
+Launch: `. ~/.cargo/env; cargo run --release -- --color blue-ringed` (`c` cycles colors).
+Observed (tmux 120x40, release): `--color teal`/bare `--color`/`NO_COLOR=1 --color teal` print list to stderr, exit 2: met. `--help` + README updated: met.
+`--color random --seed 42` showed "I'm purple today!"; seed determinism covered by unit test: met. `c` showed "blue!", mid-fade colors seen at 0.25 s; 8-cycle wrap in unit test: met.
+blue-ringed: 48-70 rings (unit test, 120x40; ~60 live), rings flash to 16;144;255 after `p`: met. `--ascii` pet capture has 0 non-ASCII chars: met. NO_COLOR purple: 0 color escapes: met.
+red == old constants (unit test): met. Not checked by me: user's eye on each hue / 256-color look, `c` mid-reaction live, return-to-muted live (covered by flash() formula only), feed/play flash.

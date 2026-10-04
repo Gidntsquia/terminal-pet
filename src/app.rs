@@ -1,5 +1,5 @@
 //! Animation state machine. No rendering here; `art` draws from this state.
-use crate::art::geo;
+use crate::art::{PRESETS, Palette, geo, lerp_pal};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -41,7 +41,44 @@ pub struct Ink {
     pub life: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ColorChoice {
+    Preset(usize),
+    Random,
+}
+
+pub fn color_list() -> String {
+    let mut v: Vec<&str> = PRESETS.iter().map(|p| p.0).collect();
+    v.push("random");
+    v.join(", ")
+}
+
+/// Case-insensitive color name lookup.
+pub fn parse_color(s: &str) -> Option<ColorChoice> {
+    let s = s.to_ascii_lowercase();
+    if s == "random" {
+        return Some(ColorChoice::Random);
+    }
+    PRESETS
+        .iter()
+        .position(|p| p.0 == s)
+        .map(ColorChoice::Preset)
+}
+
+/// Preset picked by `--color random` for a seed.
+pub fn random_preset(seed: u64) -> usize {
+    StdRng::seed_from_u64(seed).random_range(0..PRESETS.len())
+}
+
+const FADE: f32 = 0.5;
+
 pub struct App {
+    pub mono: bool,
+    /// Color-name message and seconds left.
+    pub cmsg: Option<(String, f32)>,
+    color: usize,
+    pal_from: Palette,
+    fade: f32,
     pub state: State,
     pub st: f32,
     pub t: f32,
@@ -75,6 +112,11 @@ impl App {
         let next_idle = rng.random_range(10.0..25.0);
         let next_blink = rng.random_range(3.0..7.0);
         App {
+            mono: false,
+            cmsg: None,
+            color: 0,
+            pal_from: PRESETS[0].1,
+            fade: 1.0,
             state: State::Idle,
             st: 0.0,
             t: 0.0,
@@ -92,6 +134,43 @@ impl App {
             burst: (0.0, 0.0, BURST),
             next_burst: 6.0,
             rng,
+        }
+    }
+
+    /// Set the starting preset; `announce` shows "I'm <name> today!".
+    pub fn init_color(&mut self, idx: usize, announce: bool) {
+        self.color = idx;
+        self.pal_from = PRESETS[idx].1;
+        self.fade = 1.0;
+        if announce {
+            self.cmsg = Some((format!("I'm {} today!", PRESETS[idx].0), 2.0));
+        }
+    }
+
+    /// Fade to the next preset (the `c` key).
+    pub fn next_color(&mut self) {
+        self.pal_from = self.palette();
+        self.color = (self.color + 1) % PRESETS.len();
+        self.fade = 0.0;
+        self.cmsg = Some((format!("{}!", PRESETS[self.color].0), 2.0));
+    }
+
+    pub fn palette(&self) -> Palette {
+        if self.fade >= 1.0 {
+            PRESETS[self.color].1
+        } else {
+            lerp_pal(&self.pal_from, &PRESETS[self.color].1, ease(self.fade))
+        }
+    }
+
+    /// 0..1 ring brightness: ramps in 0.3 s on pet/play, out at the end.
+    pub fn flash(&self) -> f32 {
+        match self.state {
+            State::Petting | State::Playing => {
+                let d = Self::duration(self.state);
+                ease(self.st / 0.3) * (1.0 - ease((self.st - (d - 0.3)) / 0.3))
+            }
+            _ => 0.0,
         }
     }
 
@@ -165,6 +244,15 @@ impl App {
     pub fn update(&mut self, dt: f32) {
         self.t += dt;
         self.st += dt;
+        if self.fade < 1.0 {
+            self.fade = (self.fade + dt / FADE).min(1.0);
+        }
+        if let Some((_, left)) = &mut self.cmsg {
+            *left -= dt;
+            if *left <= 0.0 {
+                self.cmsg = None;
+            }
+        }
         // Fish-like drift: mostly still, an occasional short burst to a new spot.
         if self.burst.2 < BURST {
             self.burst.2 += dt;
@@ -343,6 +431,39 @@ mod tests {
         }
         assert!(moving < 300 * 16 / 5, "moving {moving}");
         assert!((5..=30).contains(&bursts), "bursts {bursts}");
+    }
+
+    #[test]
+    fn color_parsing() {
+        assert_eq!(parse_color("red"), Some(ColorChoice::Preset(0)));
+        assert_eq!(parse_color("Blue-Ringed"), Some(ColorChoice::Preset(7)));
+        assert_eq!(parse_color("RANDOM"), Some(ColorChoice::Random));
+        assert_eq!(parse_color("teal"), None);
+        assert_eq!(parse_color(""), None);
+    }
+
+    #[test]
+    fn random_is_deterministic_and_varies() {
+        assert_eq!(random_preset(42), random_preset(42));
+        let set: std::collections::HashSet<_> = (1..12).map(random_preset).collect();
+        assert!(set.len() > 3);
+    }
+
+    #[test]
+    fn c_cycles_with_fade_and_wraps() {
+        let mut a = App::new(80, 24, 1);
+        a.next_color();
+        assert_eq!(a.cmsg.as_ref().unwrap().0, "purple!");
+        a.update(0.25);
+        let mid = a.palette();
+        assert!(mid != PRESETS[0].1 && mid != PRESETS[1].1);
+        for _ in 0..7 {
+            a.next_color();
+        }
+        a.update(0.6);
+        assert_eq!(a.palette(), PRESETS[0].1);
+        a.update(2.1);
+        assert!(a.cmsg.is_none());
     }
 
     #[test]

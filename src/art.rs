@@ -6,6 +6,124 @@ pub const MANTLE: Rgb = (0xB5, 0x40, 0x1F);
 pub const ARM: Rgb = (0xD4, 0x52, 0x1E);
 pub const PEACH: Rgb = (0xE8, 0xA0, 0x80);
 pub const FLUSH: Rgb = (0xFF, 0x5A, 0x2A);
+
+/// A full body palette. `rings` > 0 means blue rings are drawn.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Palette {
+    pub mantle: Rgb,
+    pub arm: Rgb,
+    pub peach: Rgb,
+    pub flush: Rgb,
+    pub ring: Rgb,
+    pub ring_hi: Rgb,
+    pub edge: Rgb,
+    pub rings: f32,
+}
+
+const fn body(mantle: Rgb, arm: Rgb, peach: Rgb, flush: Rgb) -> Palette {
+    Palette {
+        mantle,
+        arm,
+        peach,
+        flush,
+        ring: arm,
+        ring_hi: arm,
+        edge: mantle,
+        rings: 0.0,
+    }
+}
+
+/// Cycle order for the `c` key (random is not a preset).
+pub const PRESETS: [(&str, Palette); 8] = [
+    ("red", body(MANTLE, ARM, PEACH, FLUSH)),
+    (
+        "purple",
+        body(
+            (0x6A, 0x2A, 0x9E),
+            (0x8A, 0x44, 0xC4),
+            (0xD8, 0xB4, 0xF0),
+            (0xB8, 0x3C, 0xFF),
+        ),
+    ),
+    (
+        "blue",
+        body(
+            (0x1C, 0x3E, 0x9C),
+            (0x2C, 0x62, 0xD4),
+            (0x9C, 0xC4, 0xF4),
+            (0x2A, 0x7A, 0xFF),
+        ),
+    ),
+    (
+        "pink",
+        body(
+            (0xC0, 0x3C, 0x7C),
+            (0xE0, 0x58, 0x98),
+            (0xF8, 0xC0, 0xD8),
+            (0xFF, 0x3C, 0x9C),
+        ),
+    ),
+    (
+        "green",
+        body(
+            (0x2A, 0x82, 0x2E),
+            (0x3C, 0xB0, 0x3C),
+            (0xA8, 0xE0, 0xA0),
+            (0x2A, 0xE0, 0x50),
+        ),
+    ),
+    (
+        "gold",
+        body(
+            (0xB0, 0x84, 0x10),
+            (0xD8, 0xA8, 0x20),
+            (0xF8, 0xE4, 0x98),
+            (0xFF, 0xC8, 0x00),
+        ),
+    ),
+    (
+        "ghost",
+        body(
+            (0xBE, 0xC4, 0xDA),
+            (0xDC, 0xDE, 0xEE),
+            (0xFF, 0xFF, 0xFF),
+            (0xFF, 0xB0, 0xD0),
+        ),
+    ),
+    (
+        "blue-ringed",
+        Palette {
+            mantle: (0xA8, 0x78, 0x14),
+            arm: (0xE0, 0xB4, 0x30),
+            peach: (0xFA, 0xE6, 0x9A),
+            flush: (0xFF, 0xCC, 0x20),
+            ring: (0x34, 0x58, 0xA8),
+            ring_hi: (0x10, 0x90, 0xFF),
+            edge: (0x4A, 0x2C, 0x10),
+            rings: 1.0,
+        },
+    ),
+];
+
+pub fn lerp_pal(a: &Palette, b: &Palette, t: f32) -> Palette {
+    Palette {
+        mantle: lerp(a.mantle, b.mantle, t),
+        arm: lerp(a.arm, b.arm, t),
+        peach: lerp(a.peach, b.peach, t),
+        flush: lerp(a.flush, b.flush, t),
+        ring: lerp(a.ring, b.ring, t),
+        ring_hi: lerp(a.ring_hi, b.ring_hi, t),
+        edge: lerp(a.edge, b.edge, t),
+        rings: a.rings + (b.rings - a.rings) * t.clamp(0.0, 1.0),
+    }
+}
+
+/// 256-color cube index for an RGB value.
+pub fn to_indexed((r, g, b): Rgb) -> u8 {
+    let q = |v: u8| (v as f32 / 255.0 * 5.0).round() as u8;
+    16 + 36 * q(r) + 6 * q(g) + q(b)
+}
+
 const EYE: Rgb = (0x12, 0x08, 0x06);
 const EYE_RING: Rgb = (0x40, 0x16, 0x0A);
 const WHITE: Rgb = (0xFF, 0xFF, 0xFF);
@@ -69,6 +187,7 @@ fn asciify(c: char) -> char {
         '\u{2665}' => 'v',
         '\u{25e0}' => '^',
         '\u{25cf}' => '*',
+        '\u{25cb}' => 'o',
         '\u{b0}' => '\'',
         c if c.is_ascii() => c,
         _ => '?',
@@ -122,10 +241,16 @@ pub fn render(app: &App, ascii: bool) -> Canvas {
     draw_squid(&mut cv, app);
     draw_fx(&mut cv, app);
     let hh = h as i32;
-    if let Some(m) = app.msg {
+    if let Some((m, _)) = &app.cmsg {
+        cv.text_center(hh - 2, m, PEACH);
+    } else if let Some(m) = app.msg {
         cv.text_center(hh - 2, m, PEACH);
     }
-    cv.text_center(hh - 1, "[f] feed   [p] pet   [space] play   [q] quit", DIM);
+    cv.text_center(
+        hh - 1,
+        "[f] feed   [p] pet   [space] play   [c] color   [q] quit",
+        DIM,
+    );
     cv
 }
 
@@ -212,8 +337,11 @@ fn draw_squid_upright(cv: &mut Canvas, app: &App) {
     let top = g.top + dy.round() as i32;
     let puff = app.puff();
     let blush = app.blush();
-    let mantle = lerp(MANTLE, FLUSH, blush);
-    let arm = lerp(ARM, FLUSH, blush * 0.6);
+    let pal = app.palette();
+    let rings_on = pal.rings > 0.0 && !app.mono;
+    let ring = lerp(pal.ring, pal.ring_hi, app.flash());
+    let mantle = lerp(pal.mantle, pal.flush, blush);
+    let arm = lerp(pal.arm, pal.flush, blush * 0.6);
     let t = app.t;
 
     // mantle + fins
@@ -232,8 +360,17 @@ fn draw_squid_upright(cv: &mut Canvas, app: &App) {
             } else {
                 '\u{2588}'
             };
-            let c = if r == g.mh - 1 { PEACH } else { mantle };
+            let c = if r == g.mh - 1 { pal.peach } else { mantle };
             cv.put(cx + x, y, ch, c);
+        }
+        if rings_on && r < g.mh - 1 {
+            for x in (1 - n)..n {
+                if (x + 3 * r).rem_euclid(7) == 0 {
+                    cv.put(cx + x - 1, y, '\u{2593}', pal.edge);
+                    cv.put(cx + x + 1, y, '\u{2593}', pal.edge);
+                    cv.put(cx + x, y, '\u{25cb}', ring);
+                }
+            }
         }
         if tt < 0.55 {
             let fw = g.maxw * 0.4 * puff * (1.0 - (tt - 0.28).abs() / 0.28).max(0.0);
@@ -258,7 +395,7 @@ fn draw_squid_upright(cv: &mut Canvas, app: &App) {
         let ry = (g.hh / 2).max(1);
         for s in [-1, 1] {
             let bx = cx + s * (hwh * 0.9).round() as i32;
-            cv.put(bx, top + g.mh + ry + 1, '\u{25cf}', FLUSH);
+            cv.put(bx, top + g.mh + ry + 1, '\u{25cf}', pal.flush);
         }
     }
 
@@ -327,7 +464,11 @@ fn draw_squid_upright(cv: &mut Canvas, app: &App) {
             let y = y0 + k;
             let club = tentacle && d > 0.85;
             let (ch, c) = if k % 3 == 2 && d > 0.2 {
-                ('o', PEACH)
+                if rings_on {
+                    ('\u{25cb}', ring)
+                } else {
+                    ('o', pal.peach)
+                }
             } else if d > 0.8 {
                 ('\u{2593}', arm)
             } else {
@@ -380,6 +521,78 @@ mod tests {
             assert!(
                 (mid - w as i32).abs() <= w as i32 / 3,
                 "{w}x{h}: center {mid}"
+            );
+        }
+    }
+
+    fn ring_count(app: &App, ascii: bool) -> usize {
+        let ch = if ascii { 'o' } else { '\u{25cb}' };
+        let cv = render(app, ascii);
+        cv.cells
+            .iter()
+            .filter(|c| c.ch == ch && c.fg.is_some_and(|f| f.2 > f.0))
+            .count()
+    }
+
+    #[test]
+    fn blue_ringed_has_about_60_rings_and_flashes() {
+        let mut app = App::new(120, 40, 7);
+        app.init_color(7, false);
+        let n = ring_count(&app, false);
+        assert!((50..=70).contains(&n), "rings {n}");
+        let small = App::new(80, 24, 7);
+        let mut small = small;
+        small.init_color(7, false);
+        assert!(ring_count(&small, false) < n);
+        let rc = |app: &App| {
+            let cv = render(app, false);
+            cv.cells
+                .iter()
+                .find(|c| c.ch == '\u{25cb}')
+                .unwrap()
+                .fg
+                .unwrap()
+        };
+        let before = rc(&app);
+        app.start(State::Petting);
+        for _ in 0..8 {
+            app.update(0.0625);
+        }
+        let after = rc(&app);
+        assert!(
+            after.2 > before.2 && after.0 < before.0,
+            "{before:?} {after:?}"
+        );
+        app.mono = true;
+        assert_eq!(ring_count(&app, false), 0);
+    }
+
+    #[test]
+    fn red_is_the_old_constants() {
+        let p = PRESETS[0].1;
+        assert_eq!(
+            (p.mantle, p.arm, p.peach, p.flush),
+            (
+                (0xB5, 0x40, 0x1F),
+                (0xD4, 0x52, 0x1E),
+                (0xE8, 0xA0, 0x80),
+                (0xFF, 0x5A, 0x2A)
+            )
+        );
+    }
+
+    #[test]
+    fn presets_are_shaded_and_distinct_in_256() {
+        let lum = |c: Rgb| 0.3 * c.0 as f32 + 0.59 * c.1 as f32 + 0.11 * c.2 as f32;
+        let mut seen = std::collections::HashSet::new();
+        for (name, p) in PRESETS {
+            assert!(lum(p.mantle) < lum(p.arm), "{name}");
+            assert!(lum(p.peach) > lum(p.arm) + 15.0, "{name}");
+            let sat = |c: Rgb| c.0.max(c.1).max(c.2) as i32 - c.0.min(c.1).min(c.2) as i32;
+            assert!(sat(p.flush) >= sat(p.arm), "{name}");
+            assert!(
+                seen.insert((to_indexed(p.mantle), to_indexed(p.arm), to_indexed(p.peach))),
+                "{name}"
             );
         }
     }
