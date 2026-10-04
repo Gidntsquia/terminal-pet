@@ -4,7 +4,7 @@
   <img alt="A red-orange ASCII giant squid filling a terminal window, with hearts floating above it after being petted" src="docs/squid-pet.png">
 </p>
 
-A full-screen, colored ASCII giant squid pet for your terminal. It fills the window, sways, blinks, and blows bubbles, and you can feed it, pet it, and play with it. It's written in Rust with [ratatui](https://ratatui.rs) and the colors are based on photos of real giant squid. Nothing is saved between runs.
+A full-screen, colored ASCII giant squid pet for your terminal. It fills the window, sways, blinks, and blows bubbles, and you can feed it, pet it, and play with it. It's written in Rust with [ratatui](https://ratatui.rs), and the default red is based on photos of real giant squid. Nothing is saved between runs.
 
 ## Quickstart 🚀
 
@@ -40,6 +40,7 @@ NO_COLOR=1 squid-pet   # Monochrome
 - Petting closes its eyes, makes it blush, and sends hearts floating up.
 - Playing makes it squirt an ink cloud and dart around the screen.
 - Every so often it yawns, looks around, or lets out a small ink puff on its own.
+- Comes in eight colors. Pick one with `--color`, or press `c` to fade to the next one while it runs.
 - Uses truecolor when the terminal supports it and falls back to 256 colors.
 
 ## Documentation 📚
