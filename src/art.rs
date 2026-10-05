@@ -476,7 +476,7 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
     // eyes
     // eyes fill the head height (never poke out below) and stay inside its sides
     let hf = g.hh as f32;
-    let ryf = (hf / 2.0 - 0.3).max(0.8);
+    let ryf = (hf / 2.0).max(1.0);
     let rx = ((ryf * 2.0).round() as i32).max(2);
     let ry = (ryf.round() as i32).max(1);
     let cyf = top as f32 + g.mh as f32 + (hf - 1.0) / 2.0;
@@ -498,7 +498,7 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
                 let dy = (top + g.mh + y) as f32 - cyf;
                 for x in -rx..=rx {
                     let d = (x as f32 / rx as f32).powi(2) + (dy / ryf).powi(2);
-                    if d <= 1.15 {
+                    if d <= 1.0 {
                         let c = if d > ring_at { EYE_RING } else { EYE };
                         cv.put(ex + x, top + g.mh + y, '\u{2588}', c);
                     }
@@ -724,6 +724,6 @@ mod golden {
                 }
             }
         }
-        assert_eq!(h, 1940007880519279066);
+        assert_eq!(h, 15571150797703599290);
     }
 }
