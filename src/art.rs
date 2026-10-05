@@ -475,8 +475,8 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
 
     // eyes
     // slit eyes on the head edge: round ring, dark centre, shine; scaled by head height
-    let ry = ((g.hh + 1) / 3).max(1);
-    let rx = ry * 2;
+    let ry = ((g.hh + 2) / 6).max(1);
+    let rx = ((g.hh as f32 * 0.5).round() as i32).max(2);
     let ring_at = 0.7;
     let ey = top + g.mh + g.hh / 2;
     let look = body.look;
