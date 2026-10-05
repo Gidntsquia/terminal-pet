@@ -213,11 +213,16 @@ pub struct Geo {
 }
 
 pub fn geo(w: u16, h: u16) -> Geo {
-    let total = ((h as f32 * 0.8).round() as i32).max(8);
+    geo_s(w, h, 1.0)
+}
+
+/// Layout at a size factor (1.0 = solo size; smaller when guests share the window).
+pub fn geo_s(w: u16, h: u16, scale: f32) -> Geo {
+    let total = ((h as f32 * 0.8 * scale).round() as i32).max(8);
     let mh = (total as f32 * 0.42).round() as i32;
     let hh = ((total as f32 * 0.14).round() as i32).max(3);
     let al = (total - mh - hh).max(2);
-    let maxw = (w as f32 * 0.24).min(total as f32 * 0.6).max(3.0);
+    let maxw = (w as f32 * 0.24 * scale).min(total as f32 * 0.6).max(3.0);
     Geo {
         cx: w as i32 / 2,
         top: 0,
@@ -226,6 +231,48 @@ pub fn geo(w: u16, h: u16) -> Geo {
         al,
         maxw,
         hwh: maxw * 0.7,
+    }
+}
+
+/// Everything needed to draw one squid (the host's or a guest's).
+#[derive(Clone, Debug)]
+pub struct Body {
+    pub pal: Palette,
+    pub cx: i32,
+    pub dx: f32,
+    pub dy: f32,
+    pub scale: f32,
+    pub puff: f32,
+    pub curl: f32,
+    pub blush: f32,
+    pub flash: f32,
+    pub bright: f32,
+    pub dark: f32,
+    pub look: i32,
+    pub closed: bool,
+    pub blink: bool,
+    pub yawn: bool,
+    pub lean: f32,
+    pub food_x: f32,
+    pub t: f32,
+    /// Floating label (e.g. "guest") and its top-row x.
+    pub tag: Option<&'static str>,
+}
+
+fn tone(p: &Palette, bright: f32, dark: f32) -> Palette {
+    let f = |c: Rgb| {
+        let c = lerp(c, WHITE, 0.4 * bright);
+        lerp(c, (0x30, 0x30, 0x38), 0.8 * dark)
+    };
+    Palette {
+        mantle: f(p.mantle),
+        arm: f(p.arm),
+        peach: f(p.peach),
+        flush: f(p.flush),
+        ring: f(p.ring),
+        ring_hi: f(p.ring_hi),
+        edge: f(p.edge),
+        rings: p.rings,
     }
 }
 
@@ -238,17 +285,34 @@ pub fn render(app: &App, ascii: bool) -> Canvas {
     }
     draw_world(&mut cv, app);
     draw_bubbles(&mut cv, app);
-    draw_squid(&mut cv, app);
+    let bodies = app.bodies();
+    for b in &bodies {
+        draw_squid(&mut cv, b, app);
+    }
     draw_fx(&mut cv, app);
+    for b in &bodies {
+        if let Some(tag) = b.tag {
+            let x = b.cx + b.dx.round() as i32 - tag.len() as i32 / 2;
+            cv.text(x, 0, tag, PEACH);
+        }
+    }
     let hh = h as i32;
     if let Some((m, _)) = &app.cmsg {
         cv.text_center(hh - 2, m, PEACH);
+    } else if let Some((m, _)) = &app.note {
+        cv.text_center(hh - 2, m, PEACH);
     } else if let Some(m) = app.msg {
         cv.text_center(hh - 2, m, PEACH);
+    } else if app.is_away() {
+        cv.text_center(hh - 2, "Out visiting!", PEACH);
     }
     cv.text_center(
         hh - 1,
-        "[f] feed   [p] pet   [space] play   [c] color   [q] quit",
+        if app.social {
+            "[f] feed   [p] pet   [space] play   [v] visit   [c] color   [q] quit"
+        } else {
+            "[f] feed   [p] pet   [space] play   [c] color   [q] quit"
+        },
         DIM,
     );
     cv
@@ -303,19 +367,29 @@ fn draw_fx(cv: &mut Canvas, app: &App) {
             cv.put(hr.x.round() as i32, hr.y.round() as i32, '\u{2665}', c);
         }
     }
-    if let Some((fx, fy)) = app.food() {
+    for (fx, fy) in app.foods() {
         let (x, y) = (fx.round() as i32 - 2, fy.round() as i32);
         cv.text(x, y, "~(o>", FOOD);
         cv.put(x + 2, y, 'o', WHITE);
     }
+    for f in &app.flyers {
+        let (x, y) = (f.x.round() as i32, f.y.round() as i32);
+        if f.ink {
+            cv.text(x - 1, y, "\u{2592}\u{2593}\u{2588}", INK);
+        } else if f.vx > 0.0 {
+            cv.text(x - 2, y, "~(o>", FOOD);
+        } else {
+            cv.text(x - 2, y, "<o)~", FOOD);
+        }
+    }
 }
 
 /// Draw the squid on a scratch canvas, then shear it (diagonal lean) onto `cv`.
-fn draw_squid(cv: &mut Canvas, app: &App) {
+fn draw_squid(cv: &mut Canvas, body: &Body, app: &App) {
     let mut sq = Canvas::new(app.w, app.h, cv.ascii);
-    draw_squid_upright(&mut sq, app);
+    draw_squid_upright(&mut sq, body, app.mono);
     let mid = app.h as f32 * 0.4;
-    let lean = app.lean();
+    let lean = body.lean;
     for y in 0..sq.h {
         let s = ((y as f32 - mid) * lean).round() as i32;
         for x in 0..sq.w {
@@ -330,19 +404,19 @@ fn draw_squid(cv: &mut Canvas, app: &App) {
     }
 }
 
-fn draw_squid_upright(cv: &mut Canvas, app: &App) {
-    let g = geo(app.w, app.h);
-    let (dx, dy) = app.offset();
-    let cx = g.cx + dx.round() as i32;
+fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
+    let g = geo_s(cv.w as u16, cv.h as u16, body.scale);
+    let (dx, dy) = (body.dx, body.dy);
+    let cx = body.cx + dx.round() as i32;
     let top = g.top + dy.round() as i32;
-    let puff = app.puff();
-    let blush = app.blush();
-    let pal = app.palette();
-    let rings_on = pal.rings > 0.0 && !app.mono;
-    let ring = lerp(pal.ring, pal.ring_hi, app.flash());
+    let puff = body.puff;
+    let blush = body.blush;
+    let pal = tone(&body.pal, body.bright, body.dark);
+    let rings_on = pal.rings > 0.0 && !mono;
+    let ring = lerp(pal.ring, pal.ring_hi, body.flash.max(body.bright));
     let mantle = lerp(pal.mantle, pal.flush, blush);
     let arm = lerp(pal.arm, pal.flush, blush * 0.6);
-    let t = app.t;
+    let t = body.t;
 
     // mantle + fins
     let mh = g.mh as f32;
@@ -403,14 +477,14 @@ fn draw_squid_upright(cv: &mut Canvas, app: &App) {
     let ry = (g.hh / 2).max(1);
     let rx = ry * 2;
     let ey = top + g.mh + g.hh / 2;
-    let look = app.look();
+    let look = body.look;
     for s in [-1i32, 1] {
         let ex = cx + s * (hwh * 0.95).round() as i32;
-        if app.eyes_closed() {
+        if body.closed {
             for x in -rx..=rx {
                 cv.put(ex + x, ey, '\u{25e0}', EYE);
             }
-        } else if app.blinking() {
+        } else if body.blink {
             for x in -rx..=rx {
                 cv.put(ex + x, ey, '-', EYE);
             }
@@ -432,14 +506,13 @@ fn draw_squid_upright(cv: &mut Canvas, app: &App) {
             );
         }
     }
-    if app.yawning() {
+    if body.yawn {
         cv.put(cx, y0 - 1, 'O', EYE);
     }
 
     // arms + 2 long tentacles
-    let curl = app.curl();
-    let (fx, _) = app.food().unwrap_or((g.cx as f32, 0.0));
-    let fx = fx + dx;
+    let curl = body.curl;
+    let fx = body.food_x;
     for i in 0..10 {
         let tentacle = i >= 8;
         let (base, len) = if tentacle {
@@ -487,7 +560,6 @@ fn draw_squid_upright(cv: &mut Canvas, app: &App) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::State;
 
     fn squid_rows(w: u16, h: u16) -> (usize, usize, Vec<usize>) {
         let app = App::new(w, h, 7);
@@ -554,7 +626,7 @@ mod tests {
                 .unwrap()
         };
         let before = rc(&app);
-        app.start(State::Petting);
+        app.press(crate::app::Key::Pet);
         for _ in 0..8 {
             app.update(0.0625);
         }
@@ -607,11 +679,36 @@ mod tests {
     #[test]
     fn ascii_mode_has_no_unicode() {
         let mut app = App::new(100, 30, 1);
-        app.start(State::Petting);
+        app.press(crate::app::Key::Pet);
         for _ in 0..20 {
             app.update(0.05);
         }
         let cv = render(&app, true);
         assert!(cv.cells.iter().all(|c| c.ch.is_ascii()));
+    }
+}
+
+#[cfg(test)]
+mod golden {
+    use super::*;
+    /// Solo with a seed must render exactly as the build before visits existed.
+    #[test]
+    fn solo_seed_matches_old_build() {
+        let mut app = App::new(120, 40, 42);
+        let mut h: u64 = 1469598103934665603;
+        for i in 0..(60 * 16) {
+            app.update(1.0 / 16.0);
+            if i % 8 == 0 {
+                let cv = render(&app, false);
+                for c in &cv.cells {
+                    let v = c.ch as u64
+                        ^ c.fg.map_or(0, |f| {
+                            ((f.0 as u64) << 16) | ((f.1 as u64) << 8) | f.2 as u64
+                        }) << 8;
+                    h = (h ^ v).wrapping_mul(1099511628211);
+                }
+            }
+        }
+        assert_eq!(h, 10832562962011645795);
     }
 }
