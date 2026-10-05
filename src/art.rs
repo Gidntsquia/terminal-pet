@@ -474,20 +474,17 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
     }
 
     // eyes
-    // up to hh=4 (120x40 and smaller) keep the original eyes; bigger windows scale them in
-    let orig = g.hh <= 4;
-    let ry = if orig {
-        (g.hh / 2).max(1)
-    } else {
-        ((g.hh as f32 * 0.4).round() as i32).max(1)
-    };
-    let rx = ry * 2;
-    let inset = if orig { 0.95 } else { 0.62 };
-    let ring_at = if orig { 0.7 } else { 0.8 };
-    let ey = top + g.mh + g.hh / 2;
+    // eyes fill the head height (never poke out below) and stay inside its sides
+    let hf = g.hh as f32;
+    let ryf = (hf / 2.0 - 0.3).max(0.8);
+    let rx = ((ryf * 2.0).round() as i32).max(2);
+    let ry = (ryf.round() as i32).max(1);
+    let cyf = top as f32 + g.mh as f32 + (hf - 1.0) / 2.0;
+    let ey = cyf.floor() as i32;
+    let ring_at = 0.7;
     let look = body.look;
     for s in [-1i32, 1] {
-        let ex = cx + s * (hwh * inset).round() as i32;
+        let ex = cx + s * ((hwh * 0.8).round() as i32 - rx).max(rx / 2);
         if body.closed {
             for x in -rx..=rx {
                 cv.put(ex + x, ey, '\u{25e0}', EYE);
@@ -497,12 +494,13 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
                 cv.put(ex + x, ey, '-', EYE);
             }
         } else {
-            for y in -ry..=ry {
+            for y in 0..g.hh {
+                let dy = (top + g.mh + y) as f32 - cyf;
                 for x in -rx..=rx {
-                    let d = (x as f32 / rx as f32).powi(2) + (y as f32 / ry as f32).powi(2);
+                    let d = (x as f32 / rx as f32).powi(2) + (dy / ryf).powi(2);
                     if d <= 1.15 {
                         let c = if d > ring_at { EYE_RING } else { EYE };
-                        cv.put(ex + x, ey + y, '\u{2588}', c);
+                        cv.put(ex + x, top + g.mh + y, '\u{2588}', c);
                     }
                 }
             }
@@ -726,6 +724,6 @@ mod golden {
                 }
             }
         }
-        assert_eq!(h, 10832562962011645795);
+        assert_eq!(h, 1940007880519279066);
     }
 }
