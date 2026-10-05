@@ -474,12 +474,20 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
     }
 
     // eyes
-    let ry = ((g.hh as f32 * 0.4).round() as i32).max(1);
+    // up to hh=4 (120x40 and smaller) keep the original eyes; bigger windows scale them in
+    let orig = g.hh <= 4;
+    let ry = if orig {
+        (g.hh / 2).max(1)
+    } else {
+        ((g.hh as f32 * 0.4).round() as i32).max(1)
+    };
     let rx = ry * 2;
+    let inset = if orig { 0.95 } else { 0.62 };
+    let ring_at = if orig { 0.7 } else { 0.8 };
     let ey = top + g.mh + g.hh / 2;
     let look = body.look;
     for s in [-1i32, 1] {
-        let ex = cx + s * (hwh * 0.62).round() as i32;
+        let ex = cx + s * (hwh * inset).round() as i32;
         if body.closed {
             for x in -rx..=rx {
                 cv.put(ex + x, ey, '\u{25e0}', EYE);
@@ -492,8 +500,8 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
             for y in -ry..=ry {
                 for x in -rx..=rx {
                     let d = (x as f32 / rx as f32).powi(2) + (y as f32 / ry as f32).powi(2);
-                    if d <= 1.15 || (ry == 1 && x.abs() < rx) {
-                        let c = if d > 0.8 { EYE_RING } else { EYE };
+                    if d <= 1.15 {
+                        let c = if d > ring_at { EYE_RING } else { EYE };
                         cv.put(ex + x, ey + y, '\u{2588}', c);
                     }
                 }
@@ -718,6 +726,6 @@ mod golden {
                 }
             }
         }
-        assert_eq!(h, 510224503960051962);
+        assert_eq!(h, 10832562962011645795);
     }
 }
