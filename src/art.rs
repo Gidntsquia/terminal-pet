@@ -474,9 +474,9 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
     }
 
     // eyes
-    let ry = ((g.hh as f32 * 0.4).round() as i32).max(1);
+    let ry = ((g.hh - 1) / 2).max(1);
     let rx = ry * 2;
-    let ey = top + g.mh + g.hh / 2;
+    let ey = top + g.mh + (g.hh - 1) / 2;
     let look = body.look;
     for s in [-1i32, 1] {
         let ex = cx + s * (hwh * 0.62).round() as i32;
@@ -718,6 +718,6 @@ mod golden {
                 }
             }
         }
-        assert_eq!(h, 510224503960051962);
+        assert_eq!(h, 7454341818486791242);
     }
 }
