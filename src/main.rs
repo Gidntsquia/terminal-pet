@@ -81,7 +81,7 @@ fn main() -> io::Result<()> {
             "--seed" => seed = args.next().and_then(|s| s.parse().ok()).unwrap_or(seed),
             "-h" | "--help" => {
                 println!(
-                    "squid-pet - a giant ASCII squid pet\n\nUSAGE: squid-pet [--ascii] [--solo] [--seed N] [--color NAME]\n\n  --color NAME  body color: {}\n  --solo        don't look for other squid-pets in other terminals\n\nKeys: f feed, p pet, space play, c color, v visit a neighbor (or call your guest/visitor home), q/Esc quit\n\nSquid-pets in other terminals on this machine find each other automatically: they\nvisit (about every minute or two, or press v), share fish (f), bubble streams and\nink (space). Repeated f/p/space presses stack up. Use --solo to stay on your own.",
+                    "squid-pet - a giant ASCII squid pet\n\nUSAGE: squid-pet [--ascii] [--solo] [--seed N] [--color NAME]\n\n  --color NAME  body color: {}\n  --solo        don't look for other squid-pets in other terminals\n\nKeys: f feed, p pet, space play, c color, v visit a neighbor (or call your guest/visitor home), q/Esc quit\n\nSquid-pets in other terminals on this machine find each other automatically: they\nvisit (on their own every 20-30 minutes, with a 10 minute pause after a visit; or press v any time), share fish (f), bubble streams and\nink (space). Repeated f/p/space presses stack up. Use --solo to stay on your own.",
                     color_list()
                 );
                 return Ok(());

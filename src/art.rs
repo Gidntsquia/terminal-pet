@@ -498,12 +498,21 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
                     }
                 }
             }
-            cv.put(
-                ex - rx / 2 + look * (rx / 2).max(1),
-                ey - ry / 2,
-                '\u{25cf}',
-                WHITE,
-            );
+            let hx = ex - rx / 2 + look * (rx / 2).max(1);
+            let hy = ey - ry / 2;
+            let (hrx, hry) = ((rx - 1) / 4, ry / 4);
+            if hrx == 0 && hry == 0 {
+                cv.put(hx, hy, '\u{25cf}', WHITE);
+            }
+            for y in (-hry..=hry).filter(|_| hrx > 0 || hry > 0) {
+                for x in -hrx..=hrx {
+                    let d = (x as f32 / hrx.max(1) as f32).powi(2)
+                        + (y as f32 / hry.max(1) as f32).powi(2);
+                    if d <= 1.0 {
+                        cv.put(hx + x, hy + y, '\u{2588}', WHITE);
+                    }
+                }
+            }
         }
     }
     if body.yawn {
