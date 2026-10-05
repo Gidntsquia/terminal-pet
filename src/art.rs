@@ -505,18 +505,14 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
                     }
                 }
             }
-            let hx = ex - rx / 2 + look * (rx / 2).max(1);
-            let hy = ey - ry / 2;
-            let (hrx, hry) = (if ry == 1 { 0 } else { rx / 4 }, ry / 3);
-            if hrx == 0 && hry == 0 {
-                cv.put(hx, hy, '\u{25cf}', WHITE);
-            }
-            for y in (-hry..=hry).filter(|_| hrx > 0 || hry > 0) {
-                for x in -hrx..=hrx {
-                    let d = (x as f32 / hrx.max(1) as f32).powi(2)
-                        + (y as f32 / hry.max(1) as f32).powi(2);
-                    if d <= 1.0 {
-                        cv.put(hx + x, hy + y, '\u{2588}', WHITE);
+            if ry == 1 {
+                cv.put(ex - rx / 2 + look, ey - ry / 2, '\u{25cf}', WHITE);
+            } else {
+                // pill-shaped shine, kept inside the oval
+                let sx = ex - rx / 2 + look - (rx / 4).min(1) + 1;
+                for y in 0..(ry / 2).max(1) {
+                    for x in 0..(rx / 2) {
+                        cv.put(sx + x, ey - ry / 2 + y, '\u{2588}', WHITE);
                     }
                 }
             }
