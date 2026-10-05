@@ -481,7 +481,12 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
     let ey = top + g.mh + g.hh / 2;
     let look = body.look;
     for s in [-1i32, 1] {
-        let ex = cx + s * (hwh * 0.95).round() as i32;
+        let inset = if ry == 1 {
+            (hwh * 0.95).round() as i32
+        } else {
+            (hwh - rx as f32 * 0.4).round() as i32
+        };
+        let ex = cx + s * inset;
         if body.closed {
             for x in -rx..=rx {
                 cv.put(ex + x, ey, '\u{25e0}', EYE);
@@ -494,7 +499,7 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
             for y in -ry..=ry {
                 for x in -rx..=rx {
                     let d = (x as f32 / rx as f32).powi(2) + (y as f32 / ry as f32).powi(2);
-                    if d <= 1.15 {
+                    if d <= if ry == 1 { 1.15 } else { 1.0 } {
                         let c = if d > ring_at { EYE_RING } else { EYE };
                         cv.put(ex + x, ey + y, '\u{2588}', c);
                     }
@@ -502,7 +507,7 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
             }
             let hx = ex - rx / 2 + look * (rx / 2).max(1);
             let hy = ey - ry / 2;
-            let (hrx, hry) = ((rx - 1) / 4, ry / 4);
+            let (hrx, hry) = (if ry == 1 { 0 } else { rx / 4 }, ry / 3);
             if hrx == 0 && hry == 0 {
                 cv.put(hx, hy, '\u{25cf}', WHITE);
             }
