@@ -498,7 +498,8 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
         } else {
             for y in -ry..=ry {
                 for x in -rx..=rx {
-                    let d = (x as f32 / rx as f32).powi(2) + (y as f32 / ry as f32).powi(2);
+                    let ryf = if ry == 1 { 1.0 } else { ry as f32 + 0.5 };
+                    let d = (x as f32 / rx as f32).powi(2) + (y as f32 / ryf).powi(2);
                     if d <= if ry == 1 { 1.15 } else { 1.0 } {
                         let c = if d > ring_at { EYE_RING } else { EYE };
                         cv.put(ex + x, ey + y, '\u{2588}', c);
