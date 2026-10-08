@@ -88,8 +88,12 @@ pub struct Flyer {
     pub y: f32,
     pub vx: f32,
     pub ink: bool,
+    /// A cat's toy mouse (draws `~o`/`o~`).
+    pub mouse: bool,
     /// Incoming ink: bursts and startles the squid on reaching this x.
     pub hit_x: Option<f32>,
+    /// A local toy mouse / ink aimed at this guest (pid): reaches it when passing its x.
+    pub target: Option<u32>,
 }
 
 pub struct Bubble {
@@ -156,6 +160,8 @@ pub struct Touch {
     pub at: (f32, f32),
     /// -1..1: pointer side relative to the squid's center.
     pub dir: f32,
+    /// 0..1: how far the cat tail has swung to the far side (eased).
+    pub flip: f32,
     /// Seconds of ruffle left, and where.
     pub ruffle: f32,
     pub ruffle_at: (f32, f32),
@@ -168,6 +174,10 @@ pub struct Touch {
 }
 
 pub const BOOP: f32 = 0.5;
+/// Seconds a squid stays puffed after a toy mouse startles it.
+pub const STARTLE_T: f32 = 0.6;
+/// Seconds for the cat tail to swing fully from one side to the other.
+pub const TAIL_SWING: f32 = 0.4;
 pub const RUFFLE_NOTCH: f32 = 0.8;
 
 impl Touch {
@@ -184,6 +194,17 @@ impl Touch {
         let d = if self.held { dt / 0.25 } else { -dt };
         self.touch = (self.touch + d).clamp(0.0, 1.0);
         self.phase += dt * 16.0;
+        let want = if self.held && self.dir < 0.0 {
+            1.0
+        } else {
+            0.0
+        };
+        let step = dt / TAIL_SWING;
+        self.flip += (want - self.flip).clamp(-step, step);
+    }
+    /// Cat tail side in -1..1 (1 = rest side); sweeps continuously.
+    pub fn tail_side(&self) -> f32 {
+        1.0 - 2.0 * self.flip
     }
     /// Downward dip (cells) of the boop bounce.
     pub fn dy(&self) -> f32 {
@@ -267,6 +288,11 @@ pub struct App {
     dart_from: (f32, f32),
     pub target: (f32, f32),
     pub jolt: f32,
+    /// Seconds left of a squid's startle at a toy mouse, and the mouse's direction.
+    pub startle: f32,
+    pub startle_dir: f32,
+    /// Ink splat on a cat's fur: (seconds left, x offset from cat centre).
+    pub splat: Option<(f32, f32)>,
     pub next_idle: f32,
     pub next_blink: f32,
     pub quit: bool,
@@ -343,6 +369,9 @@ impl App {
             dart_from: (0.0, 0.0),
             target: (0.0, 0.0),
             jolt: 0.0,
+            startle: 0.0,
+            startle_dir: 0.0,
+            splat: None,
             next_idle,
             next_blink,
             quit: false,
@@ -956,6 +985,10 @@ impl App {
         }
         self.ink.retain(|i| i.age < i.life);
         self.jolt = (self.jolt - dt).max(0.0);
+        self.startle = (self.startle - dt).max(0.0);
+        if let Some((l, x)) = self.splat {
+            self.splat = (l > dt).then_some((l - dt, x));
+        }
         self.touch.update(dt);
         for g in &mut self.guests {
             g.touch.update(dt);
@@ -977,15 +1010,20 @@ impl App {
         self.feed.st - f.born
     }
     pub fn puff(&self) -> f32 {
+        let sp = if self.startle > 0.0 && self.kind != Kind::Cat {
+            1.0 + 0.3 * (std::f32::consts::PI * (1.0 - self.startle / STARTLE_T)).sin()
+        } else {
+            1.0
+        };
         if !self.feed.on {
-            return 1.0;
+            return sp;
         }
         self.fish
             .iter()
             .map(|f| self.fish_age(f))
             .filter(|a| (1.2..2.2).contains(a))
             .map(|a| 1.0 + 0.25 * (std::f32::consts::PI * (a - 1.2)).sin())
-            .fold(1.0, f32::max)
+            .fold(sp, f32::max)
     }
     pub fn curl(&self) -> f32 {
         if !self.feed.on {
@@ -1063,8 +1101,13 @@ impl App {
         } else {
             0.0
         };
+        let jerk = if self.startle > 0.0 {
+            -self.startle_dir * 2.0 * ease(((STARTLE_T - self.startle) / 0.15).min(1.0))
+        } else {
+            0.0
+        };
         (
-            px + self.wander() + self.host_dx + self.home_ox() + self.fx.dx,
+            px + self.wander() + self.host_dx + self.home_ox() + self.fx.dx + jerk,
             bob + py + jolt + self.fx.dy + self.touch.dy(),
         )
     }
@@ -1143,6 +1186,7 @@ impl App {
             ruffle: self.touch.ruffle_k(),
             ruffle_at: self.touch.ruffle_at,
             tag: None,
+            bang: self.startle > 0.0,
             ..Body::default()
         }
     }

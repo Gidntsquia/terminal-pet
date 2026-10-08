@@ -444,6 +444,12 @@ impl App {
                 _ => {}
             }
         }
+        if let Some((left, _)) = self.splat
+            && left < 1.4
+        {
+            // shaking the ink off
+            p.wiggle = (t * 40.0).sin() * (left / 1.4).min(1.0);
+        }
         if self.cat.ear_t > 0.0 {
             p.ear =
                 self.cat.ear_side * (std::f32::consts::PI * (1.0 - self.cat.ear_t / 0.35)).sin();
@@ -525,6 +531,9 @@ impl App {
             tag: None,
             head_dy: self.touch.dy(),
             dir: self.touch.dir,
+            tail: self.touch.tail_side(),
+            bang: false,
+            splat: self.splat,
         }
     }
 
@@ -791,5 +800,185 @@ mod tests {
         assert!(c.note.is_none() || c.note.as_ref().unwrap().0.contains("friend"));
         let cv = crate::art::render(&c, false);
         assert!(cv.owner.contains(&0) && cv.owner.contains(&1));
+    }
+
+    #[test]
+    fn tail_sweeps_without_jumping_during_a_drag() {
+        let mut a = cat(120, 40, 1);
+        let (cat_cell, _) = framed(&mut a);
+        let g = a.geo();
+        let row = cat_cell.1;
+        let cv = crate::art::render(&a, false);
+        let w = a.w as usize;
+        let xs: Vec<usize> = (0..w)
+            .filter(|&x| cv.owner[row as usize * w + x] != NONE)
+            .collect();
+        let (l, r) = (xs[1] as u16, xs[xs.len() - 2] as u16);
+        let reach = 1.2 * g.maxw;
+        let tip = |a: &App| a.host_body().tail * reach;
+        a.pointer(Ptr::Down, l, row);
+        for _ in 0..10 {
+            a.pointer(Ptr::Drag, l, row);
+            a.update(0.0625);
+        }
+        let mut prev = tip(&a);
+        let mut worst = 0.0f32;
+        let mut seen = vec![prev];
+        for i in 0..=30 {
+            let col = if i < 10 {
+                l + (r - l) * (i as u16) / 10
+            } else {
+                r
+            };
+            a.pointer(Ptr::Drag, col, row);
+            a.update(0.0625);
+            let t = tip(&a);
+            worst = worst.max((t - prev).abs());
+            prev = t;
+            seen.push(t);
+        }
+        // A full swing is 2*reach cells in 0.4 s: ~1/6 of it per 62 ms frame, never the
+        // old instant flip. (The spec's "3 cells" cannot hold with a 0.4 s swing at this width.)
+        assert!(
+            worst <= 0.2 * 2.0 * reach,
+            "tail tip jumped {worst} cells: {seen:?}"
+        );
+        // it did swing across, and passes through the middle on the way
+        let (lo, hi) = seen
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(a, b), &x| (a.min(x), b.max(x)));
+        assert!(lo < -0.5 * reach && hi > 0.5 * reach, "{seen:?}");
+    }
+
+    #[test]
+    fn cat_play_sends_mouse_never_ink() {
+        let mut a = cat(120, 40, 1);
+        a.enable_social(1);
+        a.peers.insert(
+            2,
+            crate::social::Peer {
+                seen: 0.0,
+                away: false,
+                accept: true,
+            },
+        );
+        let mut mice = 0;
+        for _ in 0..30 {
+            a.press(Key::Play);
+            for _ in 0..3 {
+                a.update(0.0625);
+                a.peers.get_mut(&2).unwrap().seen = a.t;
+            }
+            for (_, m) in a.outbox.drain(..) {
+                assert_ne!(m, crate::link::Msg::Ink);
+                mice += (m == crate::link::Msg::Mouse) as u32;
+            }
+        }
+        assert!((1..=2).contains(&mice), "mice {mice}");
+        assert!(a.flyers.iter().all(|f| !f.ink));
+    }
+
+    #[test]
+    fn squid_startles_at_mouse() {
+        let mut b = App::new(120, 40, 2);
+        b.enable_social(2);
+        b.on_msg(1, crate::link::Msg::Mouse);
+        let mut peak = 1.0f32;
+        let mut bang = false;
+        for _ in 0..80 {
+            b.update(0.0625);
+            peak = peak.max(b.puff());
+            if b.startle > 0.0 {
+                bang = true;
+                let cv = crate::art::render(&b, false);
+                bang &= cv.cells.iter().any(|c| c.ch == '!');
+            }
+        }
+        assert!(peak > 1.1 && bang, "peak {peak} bang {bang}");
+    }
+
+    #[test]
+    fn cat_is_inked_and_sneezes() {
+        let mut c = cat(120, 40, 1);
+        c.enable_social(1);
+        c.on_msg(2, crate::link::Msg::Ink);
+        let mut pfft = false;
+        let mut splat = false;
+        for _ in 0..60 {
+            c.update(0.0625);
+            pfft |= c.note.as_ref().is_some_and(|n| n.0 == "Pfft!");
+            splat |= c.splat.is_some();
+        }
+        assert!(pfft && splat);
+    }
+
+    fn with_guest(host_cat: bool) -> App {
+        let mut h = if host_cat {
+            cat(120, 40, 1)
+        } else {
+            App::new(120, 40, 1)
+        };
+        h.enable_social(1);
+        h.on_msg(
+            2,
+            if host_cat {
+                crate::link::Msg::Arrive(2)
+            } else {
+                crate::link::Msg::ArriveCat(2)
+            },
+        );
+        for _ in 0..200 {
+            h.on_msg(
+                2,
+                crate::link::Msg::Hello {
+                    away: true,
+                    accept: true,
+                },
+            );
+            h.update(0.06);
+        }
+        h
+    }
+
+    #[test]
+    fn guest_squid_startles_at_hosts_mouse() {
+        let mut h = with_guest(true);
+        h.press(Key::Play);
+        let (mut bang, mut puff) = (false, 1.0f32);
+        for _ in 0..80 {
+            h.on_msg(
+                2,
+                crate::link::Msg::Hello {
+                    away: true,
+                    accept: true,
+                },
+            );
+            h.update(0.0625);
+            for b in h.bodies() {
+                bang |= b.bang;
+                puff = puff.max(b.puff);
+            }
+        }
+        assert!(bang && puff > 1.1, "bang {bang} puff {puff}");
+    }
+
+    #[test]
+    fn guest_cat_is_inked_by_squid_host() {
+        let mut h = with_guest(false);
+        h.press(Key::Play);
+        let (mut splat, mut pfft) = (false, false);
+        for _ in 0..80 {
+            h.on_msg(
+                2,
+                crate::link::Msg::Hello {
+                    away: true,
+                    accept: true,
+                },
+            );
+            h.update(0.0625);
+            splat |= h.bodies().iter().any(|b| b.splat.is_some());
+            pfft |= h.note.as_ref().is_some_and(|n| n.0 == "Pfft!");
+        }
+        assert!(splat && pfft);
     }
 }

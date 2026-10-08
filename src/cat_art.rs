@@ -334,7 +334,7 @@ pub fn draw_cat(cv: &mut Canvas, body: &Body, mono: bool) {
 
     // ---- tail (behind the body) ----
     {
-        let sx = 1.0 - 2.0 * touch * if body.dir < 0.0 { 1.0 } else { 0.0 };
+        let sx = body.tail;
         let sway = (body.t * 1.6).sin() * 0.05
             + if pose.walking {
                 (pose.step * 0.5).sin() * 0.12

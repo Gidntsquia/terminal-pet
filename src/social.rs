@@ -68,11 +68,17 @@ pub struct Guest {
     pub tag: f32,
     pub fx: Fx,
     pub touch: crate::app::Touch,
+    /// Seconds left of a startle at a toy mouse, and the mouse's direction.
+    pub startle: f32,
+    pub startle_dir: f32,
+    /// Ink splat on a cat guest: (seconds left, x offset).
+    pub splat: Option<(f32, f32)>,
 }
 
 pub enum In {
     Fish,
     Ink,
+    Mouse,
     Bubbles(f32),
 }
 
@@ -105,6 +111,17 @@ fn sin_pulse(s: f32, len: f32) -> f32 {
         (std::f32::consts::PI * s / len).sin()
     } else {
         0.0
+    }
+}
+
+impl Guest {
+    /// Sideways jerk (cells) of a startle.
+    fn jerk(&self) -> f32 {
+        if self.startle > 0.0 {
+            2.0 * ease(((crate::app::STARTLE_T - self.startle) / 0.15).min(1.0))
+        } else {
+            0.0
+        }
     }
 }
 
@@ -280,7 +297,9 @@ impl App {
                         y,
                         vx: side * 45.0,
                         ink: false,
+                        mouse: false,
                         hit_x: None,
+                        target: None,
                     });
                     if let Some(p) = self.pick_cand() {
                         self.outbox.push((Some(p), Msg::Fish));
@@ -288,19 +307,41 @@ impl App {
                 }
             }
             Key::Play => {
-                if self.t - self.last_ink_send >= SEND_GAP
-                    && let Some(p) = self.pick_cand()
-                {
+                let mouse = self.kind == Kind::Cat;
+                // A guest of the other kind in this scene is the local target.
+                let want = if mouse { Kind::Squid } else { Kind::Cat };
+                let tgt = self
+                    .guests
+                    .iter()
+                    .find(|g| g.kind == want)
+                    .map(|g| (g.pid, g.x));
+                let cand = self.pick_cand();
+                if self.t - self.last_ink_send >= SEND_GAP && (cand.is_some() || tgt.is_some()) {
                     self.last_ink_send = self.t;
-                    let side = self.rand_side();
+                    let mx = self.mouth_x();
+                    let side = match tgt {
+                        Some((_, gx)) => {
+                            if gx >= mx {
+                                1.0
+                            } else {
+                                -1.0
+                            }
+                        }
+                        None => self.rand_side(),
+                    };
                     self.flyers.push(Flyer {
-                        x: self.mouth_x(),
-                        y,
+                        x: mx,
+                        y: if mouse { g_floor(self) as f32 } else { y },
                         vx: side * 45.0,
-                        ink: true,
+                        ink: !mouse,
+                        mouse,
                         hit_x: None,
+                        target: tgt.map(|t| t.0),
                     });
-                    self.outbox.push((Some(p), Msg::Ink));
+                    let m = if mouse { Msg::Mouse } else { Msg::Ink };
+                    if let Some(p) = cand {
+                        self.outbox.push((Some(p), m));
+                    }
                 }
             }
             Key::Pet => {}
@@ -390,6 +431,7 @@ impl App {
             }
             Msg::Fish => self.queue_in(In::Fish, 0.6),
             Msg::Ink => self.queue_in(In::Ink, 0.6),
+            Msg::Mouse => self.queue_in(In::Mouse, 0.6),
             Msg::Bubbles(x) => self.queue_in(In::Bubbles(x), 0.8),
             Msg::Hello { .. } | Msg::Bye => {}
         }
@@ -478,6 +520,9 @@ impl App {
             tag: 3.0,
             fx: Fx::default(),
             touch: Default::default(),
+            startle: 0.0,
+            startle_dir: 0.0,
+            splat: None,
         });
         let name = if kind == Kind::Cat {
             crate::cat::BREEDS[color].name
@@ -509,19 +554,62 @@ impl App {
         }
         let w = self.w as f32;
         let mut hits = vec![];
+        let mut mice = vec![];
         for f in &mut self.flyers {
             f.x += f.vx * dt;
             if let Some(hx) = f.hit_x
                 && ((f.vx > 0.0 && f.x >= hx) || (f.vx < 0.0 && f.x <= hx))
             {
                 f.hit_x = None;
-                f.vx = 0.0;
-                hits.push((f.x, f.y));
+                if f.mouse {
+                    // the mouse keeps running off-screen
+                    mice.push(f.vx.signum());
+                } else {
+                    f.vx = 0.0;
+                    hits.push((f.x, f.y));
+                }
             }
+        }
+        let mut gh = vec![];
+        for f in &mut self.flyers {
+            if let Some(pid) = f.target
+                && let Some(g) = self.guests.iter().find(|g| g.pid == pid)
+                && ((f.vx > 0.0 && f.x >= g.x) || (f.vx < 0.0 && f.x <= g.x))
+            {
+                f.target = None;
+                if !f.mouse {
+                    f.vx = 0.0;
+                }
+                gh.push((pid, f.vx.signum(), f.mouse));
+            }
+        }
+        for (pid, d, mouse) in gh {
+            if let Some(g) = self.guests.iter_mut().find(|g| g.pid == pid) {
+                if mouse {
+                    g.startle = crate::app::STARTLE_T;
+                    g.startle_dir = d;
+                } else {
+                    g.splat = Some((2.0, 0.0));
+                    self.note = Some(("Pfft!".to_string(), 2.0));
+                }
+            }
+        }
+        for d in mice {
+            self.startle = crate::app::STARTLE_T;
+            self.startle_dir = d;
         }
         self.flyers
             .retain(|f| (f.vx != 0.0 || f.hit_x.is_some()) && f.x > -8.0 && f.x < w + 8.0);
         for (x, y) in hits {
+            if self.kind == Kind::Cat {
+                // inked: dark splat on the fur, sneeze, shake it off
+                self.splat = Some((2.0, x - self.mouth_x()));
+                self.state = State::IdleBehavior(Behavior::InkPuff);
+                self.st = 0.0;
+                self.cat_sneeze();
+                self.note("Pfft!", 2.0);
+                continue;
+            }
             self.spawn_ink_v(x, y, 16, 0.0, 14.0);
             self.jolt = 0.4;
             self.note("Eep!", 2.0);
@@ -640,6 +728,10 @@ impl App {
             let g = &mut self.guests[i];
             g.age += dt;
             g.tag = (g.tag - dt).max(0.0);
+            g.startle = (g.startle - dt).max(0.0);
+            if let Some((l, x)) = g.splat {
+                g.splat = (l > dt).then_some((l - dt, x));
+            }
             if g.phase == GPhase::Present && g.age >= VISIT_LEN {
                 self.leave_guest(i);
             }
@@ -893,7 +985,23 @@ impl App {
                     y,
                     vx: -side * 40.0,
                     ink: true,
+                    mouse: false,
                     hit_x: Some(hit),
+                    target: None,
+                });
+            }
+            In::Mouse => {
+                let side = self.rand_side();
+                let x = if side < 0.0 { -2.0 } else { w + 2.0 };
+                let hit = self.mouth_x() - side * g.maxw * 1.4;
+                self.flyers.push(Flyer {
+                    x,
+                    y: g_floor(self) as f32,
+                    vx: -side * 45.0,
+                    ink: false,
+                    mouse: true,
+                    hit_x: Some(hit),
+                    target: None,
                 });
             }
             In::Bubbles(xf) => {
@@ -987,14 +1095,24 @@ impl App {
                 boop: (g.touch.boop / crate::app::BOOP).clamp(0.0, 1.0),
                 head_dy: g.touch.dy(),
                 dir: g.touch.dir,
+                tail: g.touch.tail_side(),
                 pose: crate::cat::CatPose {
                     tail_tw: if (tt % 6.0) < 0.5 {
                         (tt * 30.0).sin()
                     } else {
                         0.0
                     },
+                    sneeze: g.splat.map_or(0.0, |(l, _)| sin_pulse(1.7 - l, 0.45)),
+                    wiggle: g.splat.map_or(0.0, |(l, _)| {
+                        if l < 1.4 {
+                            (tt * 40.0).sin() * l / 1.4
+                        } else {
+                            0.0
+                        }
+                    }),
                     ..Default::default()
                 },
+                splat: g.splat,
                 cx,
                 dx: g.x - cx as f32 + g.fx.dx,
                 dy: g.fx.dy,
@@ -1018,10 +1136,14 @@ impl App {
         Body {
             pal: PRESETS[g.color].1,
             cx,
-            dx: g.x - cx as f32 + g.fx.dx,
+            dx: g.x - cx as f32 + g.fx.dx - g.startle_dir * g.jerk(),
+            bang: g.startle > 0.0,
             dy: 1.0 + 0.6 * (tt * 0.35).sin() + g.fx.dy + g.touch.dy(),
             scale: self.scale,
-            puff: 1.0,
+            puff: 1.0
+                + 0.3
+                    * sin_pulse(crate::app::STARTLE_T - g.startle, crate::app::STARTLE_T)
+                    * (g.startle > 0.0) as u8 as f32,
             curl: 0.0,
             blush: (g.touch.stroke / 0.5).min(1.0),
             flash: 0.0,
@@ -1100,6 +1222,11 @@ fn mv_fx(ctl: &PlayCtl, i: usize, pos: &[f32], amp: f32, want: f32) -> Fx {
         }
     }
     fx
+}
+
+/// Row the toy mouse runs along (the floor, just above the status lines).
+fn g_floor(a: &App) -> i32 {
+    a.h as i32 - 5
 }
 
 #[cfg(test)]

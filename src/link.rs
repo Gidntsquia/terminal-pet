@@ -26,6 +26,8 @@ pub enum Msg {
     Bye,
     Fish,
     Ink,
+    /// A cat's toy mouse skitters across.
+    Mouse,
     /// Bubble stream; x position as 0..1 of the width.
     Bubbles(f32),
 }
@@ -45,6 +47,7 @@ impl Msg {
             Msg::Bye => format!("{pid} BYE"),
             Msg::Fish => format!("{pid} FISH"),
             Msg::Ink => format!("{pid} INK"),
+            Msg::Mouse => format!("{pid} MOUSE"),
             Msg::Bubbles(x) => format!("{pid} BUB {x:.3}"),
         }
     }
@@ -71,6 +74,7 @@ impl Msg {
             "BYE" => Msg::Bye,
             "FISH" => Msg::Fish,
             "INK" => Msg::Ink,
+            "MOUSE" => Msg::Mouse,
             "BUB" => Msg::Bubbles(a?.parse::<f32>().ok()?.clamp(0.0, 1.0)),
             _ => return None,
         };
@@ -225,6 +229,7 @@ mod tests {
             Msg::Bye,
             Msg::Fish,
             Msg::Ink,
+            Msg::Mouse,
         ] {
             assert_eq!(Msg::decode(&m.encode(42)), Some((42, m)));
         }

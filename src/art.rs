@@ -277,6 +277,12 @@ pub struct Body {
     pub pose: crate::cat::CatPose,
     pub head_dy: f32,
     pub dir: f32,
+    /// Cat tail side, -1..1.
+    pub tail: f32,
+    /// Startled: show `!` above the head.
+    pub bang: bool,
+    /// Ink splat on the fur: (seconds left, x offset).
+    pub splat: Option<(f32, f32)>,
 }
 
 impl Default for Body {
@@ -313,6 +319,9 @@ impl Default for Body {
             pose: Default::default(),
             head_dy: 0.0,
             dir: 0.0,
+            tail: 1.0,
+            bang: false,
+            splat: None,
         }
     }
 }
@@ -470,11 +479,30 @@ fn draw_fx(cv: &mut Canvas, app: &App) {
         cv.text(x, y, "~(o>", FOOD);
         cv.put(x + 2, y, 'o', WHITE);
     }
+    for b in app.bodies() {
+        let g = app.geo();
+        let x = g.cx + b.dx.round() as i32;
+        let top = g.top as f32 + b.dy;
+        if b.bang {
+            cv.text(x, top.round() as i32 - 1, "!", (0xFF, 0xE0, 0x80));
+        }
+        if let Some((left, ox)) = b.splat {
+            let y = top.round() as i32 + g.mh / 2;
+            let ch = if left > 1.0 {
+                "\u{2593}\u{2588}\u{2592}"
+            } else {
+                "\u{2592}\u{2591}"
+            };
+            cv.text(x + ox.round() as i32 - 1, y, ch, INK);
+            cv.text(x + ox.round() as i32, y + 1, "\u{2592}", INK);
+        }
+    }
     for f in &app.flyers {
         let (x, y) = (f.x.round() as i32, f.y.round() as i32);
-        if app.is_cat() && f.ink {
-            cv.text(x - 2, y, "=*!*=", (0xFF, 0xE0, 0x80));
-        } else if app.is_cat() {
+        if f.mouse {
+            let (txt, dx) = if f.vx >= 0.0 { ("~o", -1) } else { ("o~", -1) };
+            cv.text(x + dx, y, txt, (0xF0, 0xF0, 0xFF));
+        } else if app.is_cat() && !f.ink {
             cv.text(x - 1, y, "(o)", (0xE0, 0xA0, 0x50));
         } else if f.ink {
             cv.text(x - 1, y, "\u{2592}\u{2593}\u{2588}", INK);
