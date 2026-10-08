@@ -565,9 +565,19 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
                 x += (pxu - x) * body.touch * prox * d.sqrt();
             }
             if body.ruffle > 0.0 {
-                let prox = (1.0 - (x - rxu).abs() / (g.maxw * 0.7)).max(0.0)
-                    * (1.0 - (y as f32 - body.ruffle_at.1).abs() / (g.al as f32 * 0.7)).max(0.0);
-                x += body.ruffle * prox * 2.5 * (t * 20.0 + k as f32 * 1.1 + i as f32).sin();
+                let prox = (1.0 - (x - rxu).abs() / (g.maxw * 1.6))
+                    .max(0.0)
+                    .sqrt()
+                    .max(0.35)
+                    * (1.0 - (y as f32 - body.ruffle_at.1).abs() / (g.al as f32 * 1.5))
+                        .max(0.0)
+                        .sqrt()
+                        .max(0.35);
+                x += body.ruffle
+                    * prox
+                    * 4.0
+                    * d.sqrt()
+                    * (t * 14.0 + k as f32 * 0.9 + i as f32).sin();
             }
             let xi = x.round() as i32;
             let slope = x - prev;

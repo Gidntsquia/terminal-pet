@@ -140,9 +140,11 @@ pub struct Touch {
     pub ruffle_at: (f32, f32),
     /// Guests only: seconds of closed eyes and blush left.
     pub stroke: f32,
+    /// Purr phase, advances while stroked.
+    pub phase: f32,
 }
 
-pub const BOOP: f32 = 0.4;
+pub const BOOP: f32 = 0.5;
 pub const RUFFLE_NOTCH: f32 = 0.8;
 
 impl Touch {
@@ -152,19 +154,24 @@ impl Touch {
         self.stroke = (self.stroke - dt).max(0.0);
         let d = if self.held { dt / 0.25 } else { -dt };
         self.touch = (self.touch + d).clamp(0.0, 1.0);
+        self.phase += dt * 16.0;
     }
     /// Downward dip (cells) of the boop bounce.
     pub fn dy(&self) -> f32 {
+        // stroke: quick purr wobble while held
+        let purr = 0.7 * ease(self.touch) * self.phase.sin();
         if self.boop <= 0.0 {
-            return 0.0;
+            return purr;
         }
-        2.0 * (std::f32::consts::PI * (1.0 - self.boop / BOOP)).sin()
+        // boop: big dip that springs back with a small rebound
+        let u = 1.0 - self.boop / BOOP;
+        purr + 3.5 * (std::f32::consts::PI * u).sin() * (1.0 - 0.5 * u)
     }
     pub fn lean(&self) -> f32 {
-        -0.5 * self.dir * ease(self.touch)
+        -self.dir * ease(self.touch)
     }
     pub fn ruffle_k(&self) -> f32 {
-        (self.ruffle / 0.4).min(1.0)
+        (self.ruffle / 0.3).min(1.0)
     }
 }
 
