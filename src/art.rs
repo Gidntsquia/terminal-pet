@@ -199,7 +199,7 @@ fn asciify(c: char) -> char {
     }
 }
 
-fn lerp(a: Rgb, b: Rgb, t: f32) -> Rgb {
+pub fn lerp(a: Rgb, b: Rgb, t: f32) -> Rgb {
     let t = t.clamp(0.0, 1.0);
     let f = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
     (f(a.0, b.0), f(a.1, b.1), f(a.2, b.2))
@@ -267,6 +267,53 @@ pub struct Body {
     pub ruffle_at: (f32, f32),
     /// Floating label (e.g. "guest") and its top-row x.
     pub tag: Option<&'static str>,
+    // ---- cat only ----
+    pub kind: crate::app::Kind,
+    pub breed: usize,
+    pub breed_from: usize,
+    pub bfade: f32,
+    pub boop: f32,
+    pub pose: crate::cat::CatPose,
+    pub head_dy: f32,
+    pub dir: f32,
+}
+
+impl Default for Body {
+    fn default() -> Self {
+        Body {
+            pal: PRESETS[0].1,
+            cx: 0,
+            dx: 0.0,
+            dy: 0.0,
+            scale: 1.0,
+            puff: 1.0,
+            curl: 0.0,
+            blush: 0.0,
+            flash: 0.0,
+            bright: 0.0,
+            dark: 0.0,
+            look: 0,
+            closed: false,
+            blink: false,
+            yawn: false,
+            lean: 0.0,
+            food_x: 0.0,
+            t: 0.0,
+            touch: 0.0,
+            touch_at: (0.0, 0.0),
+            ruffle: 0.0,
+            ruffle_at: (0.0, 0.0),
+            tag: None,
+            kind: crate::app::Kind::Squid,
+            breed: 0,
+            breed_from: 0,
+            bfade: 1.0,
+            boop: 0.0,
+            pose: Default::default(),
+            head_dy: 0.0,
+            dir: 0.0,
+        }
+    }
 }
 
 fn tone(p: &Palette, bright: f32, dark: f32) -> Palette {
@@ -293,11 +340,20 @@ pub fn render(app: &App, ascii: bool) -> Canvas {
         cv.text_center(h as i32 / 2, "terminal too small (min 40x12)", PEACH);
         return cv;
     }
-    draw_world(&mut cv, app);
+    let cat = app.is_cat();
+    if cat {
+        crate::cat_art::draw_room(&mut cv, app);
+    } else {
+        draw_world(&mut cv, app);
+    }
     draw_bubbles(&mut cv, app);
     let bodies = app.bodies();
     for (i, b) in bodies.iter().enumerate() {
-        draw_squid(&mut cv, b, app, i as u8);
+        if b.kind == crate::app::Kind::Cat {
+            crate::cat_art::draw_cat_into(&mut cv, b, app.mono, i as u8, app.w, app.h);
+        } else {
+            draw_squid(&mut cv, b, app, i as u8);
+        }
     }
     draw_fx(&mut cv, app);
     for b in &bodies {
@@ -318,10 +374,13 @@ pub fn render(app: &App, ascii: bool) -> Canvas {
     }
     cv.text_center(
         hh - 1,
-        if app.social {
-            "[f] feed   [p] pet   [space] play   [v] visit   [c] color   [q] quit"
-        } else {
-            "[f] feed   [p] pet   [space] play   [c] color   [q] quit"
+        match (cat, app.social) {
+            (false, true) => "[f] feed   [p] pet   [space] play   [v] visit   [c] color   [q] quit",
+            (false, false) => "[f] feed   [p] pet   [space] play   [c] color   [q] quit",
+            (true, true) => {
+                "[f] treat   [p] pet   [space] laser   [v] visit   [c] breed   [q] quit"
+            }
+            (true, false) => "[f] treat   [p] pet   [space] laser   [c] breed   [q] quit",
         },
         DIM,
     );
@@ -364,6 +423,16 @@ fn draw_fx(cv: &mut Canvas, app: &App) {
         } else {
             '\u{2592}'
         };
+        if i.spark {
+            let c = lerp((0xFF, 0xF0, 0xA0), (0xC0, 0x60, 0x20), k);
+            cv.put(
+                i.x.round() as i32,
+                i.y.round() as i32,
+                if k < 0.5 { '*' } else { '\'' },
+                c,
+            );
+            continue;
+        }
         cv.put(
             i.x.round() as i32,
             i.y.round() as i32,
@@ -377,14 +446,36 @@ fn draw_fx(cv: &mut Canvas, app: &App) {
             cv.put(hr.x.round() as i32, hr.y.round() as i32, '\u{2665}', c);
         }
     }
-    for (fx, fy) in app.foods() {
+    if app.is_cat() {
+        for (fx, fy) in app.foods() {
+            cv.text(
+                fx.round() as i32 - 1,
+                fy.round() as i32,
+                "(o)",
+                (0xE0, 0xA0, 0x50),
+            );
+        }
+        if let Some((lx, ly)) = app.laser_pos() {
+            cv.put(
+                lx.round() as i32,
+                ly.round() as i32,
+                '\u{25cf}',
+                (0xFF, 0x20, 0x20),
+            );
+        }
+    }
+    for (fx, fy) in app.foods().into_iter().filter(|_| !app.is_cat()) {
         let (x, y) = (fx.round() as i32 - 2, fy.round() as i32);
         cv.text(x, y, "~(o>", FOOD);
         cv.put(x + 2, y, 'o', WHITE);
     }
     for f in &app.flyers {
         let (x, y) = (f.x.round() as i32, f.y.round() as i32);
-        if f.ink {
+        if app.is_cat() && f.ink {
+            cv.text(x - 2, y, "=*!*=", (0xFF, 0xE0, 0x80));
+        } else if app.is_cat() {
+            cv.text(x - 1, y, "(o)", (0xE0, 0xA0, 0x50));
+        } else if f.ink {
             cv.text(x - 1, y, "\u{2592}\u{2593}\u{2588}", INK);
         } else if f.vx > 0.0 {
             cv.text(x - 2, y, "~(o>", FOOD);

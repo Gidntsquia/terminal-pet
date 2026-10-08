@@ -18,6 +18,8 @@ pub enum Msg {
     Nak,
     /// Guest arrives (preset index).
     Arrive(u8),
+    /// A cat guest arrives (breed index).
+    ArriveCat(u8),
     Color(u8),
     Recall,
     Home,
@@ -36,6 +38,7 @@ impl Msg {
             Msg::Ack => format!("{pid} ACK"),
             Msg::Nak => format!("{pid} NAK"),
             Msg::Arrive(c) => format!("{pid} ARR {c}"),
+            Msg::ArriveCat(c) => format!("{pid} ARRC {c}"),
             Msg::Color(c) => format!("{pid} COL {c}"),
             Msg::Recall => format!("{pid} RCL"),
             Msg::Home => format!("{pid} HOME"),
@@ -61,6 +64,7 @@ impl Msg {
             "ACK" => Msg::Ack,
             "NAK" => Msg::Nak,
             "ARR" => Msg::Arrive(a?.parse().ok()?),
+            "ARRC" => Msg::ArriveCat(a?.parse().ok()?),
             "COL" => Msg::Color(a?.parse().ok()?),
             "RCL" => Msg::Recall,
             "HOME" => Msg::Home,
@@ -85,7 +89,7 @@ fn default_dir() -> PathBuf {
     if let Some(x) = std::env::var_os("XDG_RUNTIME_DIR") {
         let p = PathBuf::from(x);
         if p.is_absolute() && p.is_dir() {
-            return p.join("squid-pet");
+            return p.join("terminal-pet");
         }
     }
     let user = std::env::var("USER")
@@ -95,7 +99,7 @@ fn default_dir() -> PathBuf {
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
         .collect();
-    PathBuf::from(format!("/tmp/squid-pet-{user}"))
+    PathBuf::from(format!("/tmp/terminal-pet-{user}"))
 }
 
 impl Link {

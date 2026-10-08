@@ -1,7 +1,8 @@
 //! Visits, messages between squid-pets, the shared-window layout and play moves.
 //! Pure state logic: sockets live in `link`, drawing in `art`.
+use crate::app::Kind;
 use crate::app::{App, Behavior, Flyer, Heart, Key, State, ease};
-use crate::art::{Body, PRESETS, geo};
+use crate::art::{Body, PRESETS};
 use crate::link::Msg;
 use rand::Rng;
 use rand::seq::SliceRandom;
@@ -54,6 +55,7 @@ pub struct Fx {
 
 pub struct Guest {
     pub pid: u32,
+    pub kind: Kind,
     pub color: usize,
     pub phase: GPhase,
     pub side: f32,
@@ -135,6 +137,26 @@ impl App {
         matches!(self.home, Home::Away { .. })
     }
 
+    /// Unscaled layout of this process's own pet.
+    fn geo_full(&self) -> crate::art::Geo {
+        if self.kind == Kind::Cat {
+            crate::cat_art::geo_cat(self.w, self.h, 1.0)
+        } else {
+            crate::art::geo(self.w, self.h)
+        }
+    }
+
+    pub fn kind_of(&self, pid: u32) -> Kind {
+        if pid == 0 {
+            self.kind
+        } else {
+            self.guests
+                .iter()
+                .find(|g| g.pid == pid)
+                .map_or(self.kind, |g| g.kind)
+        }
+    }
+
     fn note(&mut self, s: &str, secs: f32) {
         self.note = Some((s.to_string(), secs));
     }
@@ -149,7 +171,7 @@ impl App {
 
     /// Cells beyond the window edge where a squid is fully out of sight.
     fn margin(&self) -> f32 {
-        3.0 * geo(self.w, self.h).maxw + self.h as f32 * 0.5 + 4.0
+        3.0 * self.geo_full().maxw + self.h as f32 * 0.5 + 4.0
     }
 
     fn off_x(&self, side: f32) -> f32 {
@@ -161,7 +183,7 @@ impl App {
     }
 
     fn exit_dist(&self) -> f32 {
-        let g = geo(self.w, self.h);
+        let g = self.geo_full();
         let room = (self.w as f32 / 2.0 - g.maxw * 2.2).max(0.0);
         self.w as f32 / 2.0 + self.margin() + room
     }
@@ -337,10 +359,16 @@ impl App {
                     self.home = Home::Home;
                 }
             }
-            Msg::Arrive(c) => self.on_arrive(from, c as usize),
+            Msg::Arrive(c) => self.on_arrive(from, c as usize, Kind::Squid),
+            Msg::ArriveCat(c) => self.on_arrive(from, c as usize, Kind::Cat),
             Msg::Color(c) => {
                 if let Some(g) = self.guests.iter_mut().find(|g| g.pid == from) {
-                    g.color = (c as usize).min(PRESETS.len() - 1);
+                    let n = if g.kind == Kind::Cat {
+                        crate::cat::BREEDS.len()
+                    } else {
+                        PRESETS.len()
+                    };
+                    g.color = (c as usize).min(n - 1);
                 }
             }
             Msg::Recall => {
@@ -417,14 +445,19 @@ impl App {
         }
     }
 
-    fn on_arrive(&mut self, from: u32, color: usize) {
+    fn on_arrive(&mut self, from: u32, color: usize, kind: Kind) {
         if self.home != Home::Home || !self.can_host() {
             self.outbox.push((Some(from), Msg::Home));
             return;
         }
         self.reserved.retain(|r| r.0 != from);
         self.guests.retain(|g| g.pid != from);
-        let color = color.min(PRESETS.len() - 1);
+        let n = if kind == Kind::Cat {
+            crate::cat::BREEDS.len()
+        } else {
+            PRESETS.len()
+        };
+        let color = color.min(n - 1);
         let left = self.guests.iter().filter(|g| g.side < 0.0).count();
         let right = self.guests.len() - left;
         let side = if left <= right { -1.0 } else { 1.0 };
@@ -432,6 +465,7 @@ impl App {
         let t0 = self.vrng.random_range(0.0..20.0);
         self.guests.push(Guest {
             pid: from,
+            kind,
             color,
             phase: GPhase::Entering,
             side,
@@ -445,7 +479,12 @@ impl App {
             fx: Fx::default(),
             touch: Default::default(),
         });
-        self.note(&format!("A {} friend is here!", PRESETS[color].0), 3.0);
+        let name = if kind == Kind::Cat {
+            crate::cat::BREEDS[color].name
+        } else {
+            PRESETS[color].0
+        };
+        self.note(&format!("A {name} friend is here!"), 3.0);
     }
 
     // ---- per-frame ----
@@ -529,8 +568,12 @@ impl App {
                 if u < LEAVE_T {
                     self.home = Home::Leaving { to, u, side };
                 } else if self.peers.contains_key(&to) {
-                    self.outbox
-                        .push((Some(to), Msg::Arrive(self.color_idx() as u8)));
+                    let m = if self.kind == Kind::Cat {
+                        Msg::ArriveCat(self.color_idx() as u8)
+                    } else {
+                        Msg::Arrive(self.color_idx() as u8)
+                    };
+                    self.outbox.push((Some(to), m));
                     self.home = Home::Away {
                         host: to,
                         since: self.t,
@@ -646,7 +689,7 @@ impl App {
         }
         // Shrink so everyone fits; ease about 0.7 s.
         let n = 1 + self.guests.len();
-        let full = geo(self.w, self.h).maxw;
+        let full = self.geo_full().maxw;
         let target = if n == 1 {
             1.0
         } else {
@@ -786,6 +829,9 @@ impl App {
                         let d = pos[to] - pos[from];
                         let sign = if d >= 0.0 { 1.0 } else { -1.0 };
                         let dist = d.abs().max(10.0);
+                        let from_cat = self.kind_of(ctl.parts[from]) == Kind::Cat;
+                        let saved = self.kind;
+                        self.kind = if from_cat { Kind::Cat } else { Kind::Squid };
                         self.spawn_ink_v(
                             pos[from] + sign * g.maxw * 0.6,
                             y,
@@ -793,6 +839,7 @@ impl App {
                             sign * dist * 2.4,
                             3.0,
                         );
+                        self.kind = saved;
                     }
                 }
             }
@@ -856,7 +903,11 @@ impl App {
                         x,
                         y: self.h as f32 - 3.0 + k as f32 * 1.6,
                         vy: self.vrng.random_range(2.5..5.0),
-                        ch: ['o', 'O', '\u{b0}'][self.vrng.random_range(0..3)],
+                        ch: if self.kind == Kind::Cat {
+                            ['.', '*', '\u{b0}'][self.vrng.random_range(0..3)]
+                        } else {
+                            ['o', 'O', '\u{b0}'][self.vrng.random_range(0..3)]
+                        },
                         phase: self.vrng.random_range(0.0..std::f32::consts::TAU),
                     });
                 }
@@ -906,7 +957,7 @@ impl App {
                         x,
                         y: (g.top + g.mh) as f32 + k as f32 * 1.6,
                         vy: self.vrng.random_range(3.0..5.0),
-                        ch: 'o',
+                        ch: if self.kind == Kind::Cat { '*' } else { 'o' },
                         phase: self.vrng.random_range(0.0..std::f32::consts::TAU),
                     });
                 }
@@ -927,6 +978,43 @@ impl App {
     fn guest_body(&self, g: &Guest) -> Body {
         let cx = self.geo().cx;
         let tt = self.t + g.t0;
+        if g.kind == Kind::Cat {
+            return Body {
+                kind: Kind::Cat,
+                breed: g.color,
+                breed_from: g.color,
+                bfade: 1.0,
+                boop: (g.touch.boop / crate::app::BOOP).clamp(0.0, 1.0),
+                head_dy: g.touch.dy(),
+                dir: g.touch.dir,
+                pose: crate::cat::CatPose {
+                    tail_tw: if (tt % 6.0) < 0.5 {
+                        (tt * 30.0).sin()
+                    } else {
+                        0.0
+                    },
+                    ..Default::default()
+                },
+                cx,
+                dx: g.x - cx as f32 + g.fx.dx,
+                dy: g.fx.dy,
+                scale: self.scale,
+                blush: (g.touch.stroke / 0.5).min(1.0),
+                bright: g.fx.bright,
+                dark: g.fx.dark,
+                closed: g.touch.stroke > 0.0,
+                blink: tt % 5.0 < 0.15,
+                lean: 0.25 * g.touch.lean(),
+                food_x: g.x,
+                t: tt,
+                touch: ease(g.touch.touch),
+                touch_at: g.touch.at,
+                ruffle: g.touch.ruffle_k(),
+                ruffle_at: g.touch.ruffle_at,
+                tag: (g.tag > 0.0).then_some("guest"),
+                ..Body::default()
+            };
+        }
         Body {
             pal: PRESETS[g.color].1,
             cx,
@@ -951,6 +1039,7 @@ impl App {
             ruffle: g.touch.ruffle_k(),
             ruffle_at: g.touch.ruffle_at,
             tag: (g.tag > 0.0).then_some("guest"),
+            ..Body::default()
         }
     }
 }
@@ -1395,7 +1484,7 @@ mod tests {
 
     #[test]
     fn geo_scale_one_is_solo() {
-        let a = geo(120, 40);
+        let a = crate::art::geo(120, 40);
         let b = geo_s(120, 40, 1.0);
         assert_eq!((a.mh, a.hh, a.al, a.maxw), (b.mh, b.hh, b.al, b.maxw));
     }

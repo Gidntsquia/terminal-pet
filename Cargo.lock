@@ -1262,15 +1262,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9395f0f0eee849a9b707b2f06bb92a6a422090e2123bb2ef8e87a0e61892a8e"
 
 [[package]]
-name = "squid-pet"
-version = "0.1.0"
-dependencies = [
- "crossterm",
- "rand 0.9.5",
- "ratatui",
-]
-
-[[package]]
 name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1347,6 +1338,15 @@ dependencies = [
  "rustix",
  "signal-hook",
  "windows-sys",
+]
+
+[[package]]
+name = "terminal-pet"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
+ "rand 0.9.5",
+ "ratatui",
 ]
 
 [[package]]
