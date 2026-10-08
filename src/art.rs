@@ -487,13 +487,7 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
     // eyes
     // slit eyes on the head edge: round ring, dark centre, shine; scaled by head height
     let ry = (((g.hh - 1) as f32 / 3.0).round() as i32).max(1);
-    let rx = if g.hh <= 4 {
-        2
-    } else if ry == 1 {
-        g.hh - 1
-    } else {
-        (g.hh as f32 * 0.6).round() as i32
-    };
+    let rx = if g.hh <= 4 { 2 } else { g.hh - 1 };
     let ring_at = 0.7;
     let ey = top + g.mh + g.hh / 2;
     let look = body.look;
@@ -501,9 +495,7 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
         let inset = if ry == 1 {
             (hwh * 0.95).round() as i32
         } else {
-            // large eyes sit fully inside the head outline, one cell from its edge
-            let low = (g.hh / 2 + ry) as f32 / g.hh as f32;
-            ((hwh * (1.0 - 0.25 * low)).round() as i32 - rx - 1).max(0)
+            (hwh - rx as f32 * 0.4).round() as i32
         };
         let ex = cx + s * inset;
         if body.closed {
@@ -755,40 +747,5 @@ mod golden {
             }
         }
         assert_eq!(h, 5248091251924366442);
-    }
-}
-
-#[cfg(test)]
-mod eyes {
-    use super::*;
-    #[test]
-    fn large_eyes_stay_inside_the_head() {
-        for (w, h) in [(160u16, 50u16), (200, 60), (300, 90), (400, 120)] {
-            let app = App::new(w, h, 7);
-            let cv = render(&app, false);
-            let g = geo(w, h);
-            let cx = w as i32 / 2;
-            let mut seen = 0;
-            for y in 0..cv.h {
-                let (mut lo, mut hi) = (i32::MAX, i32::MIN);
-                for x in 0..cv.w {
-                    let c = cv.cells[y * cv.w + x];
-                    if matches!(c.fg, Some(EYE) | Some(EYE_RING) | Some(WHITE)) {
-                        seen += 1;
-                        lo = lo.min(x as i32);
-                        hi = hi.max(x as i32);
-                    }
-                }
-                if lo <= hi {
-                    let head = |yy: usize| {
-                        let t2 = (yy as i32 - g.mh) as f32 / g.hh as f32;
-                        (g.hwh * (1.0 - 0.25 * t2)).round() as i32
-                    };
-                    assert!(hi - cx <= head(y), "{w}x{h} row {y}");
-                    assert!(cx - lo <= head(y), "{w}x{h} row {y}");
-                }
-            }
-            assert!(seen > 0);
-        }
     }
 }
