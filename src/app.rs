@@ -138,6 +138,8 @@ pub struct Touch {
     /// Seconds of ruffle left, and where.
     pub ruffle: f32,
     pub ruffle_at: (f32, f32),
+    /// 0..1 smoothed ruffle strength; eases in and out.
+    pub ruffle_lvl: f32,
     /// Guests only: seconds of closed eyes and blush left.
     pub stroke: f32,
     /// Purr phase, advances while stroked.
@@ -151,6 +153,12 @@ impl Touch {
     pub fn update(&mut self, dt: f32) {
         self.boop = (self.boop - dt).max(0.0);
         self.ruffle = (self.ruffle - dt).max(0.0);
+        let rate = if self.ruffle > 0.0 {
+            dt / 0.5
+        } else {
+            -dt / 0.8
+        };
+        self.ruffle_lvl = (self.ruffle_lvl + rate).clamp(0.0, 1.0);
         self.stroke = (self.stroke - dt).max(0.0);
         let d = if self.held { dt / 0.25 } else { -dt };
         self.touch = (self.touch + d).clamp(0.0, 1.0);
@@ -171,7 +179,7 @@ impl Touch {
         -self.dir * ease(self.touch)
     }
     pub fn ruffle_k(&self) -> f32 {
-        (self.ruffle / 0.3).min(1.0)
+        ease(self.ruffle_lvl)
     }
 }
 

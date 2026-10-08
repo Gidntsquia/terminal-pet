@@ -785,6 +785,7 @@ mod ruffle_tests {
         let base = render(&a, false);
         let g = geo_s(120, 40, 1.0);
         a.touch.ruffle = 1.0;
+        a.touch.ruffle_lvl = 1.0;
         a.touch.ruffle_at = (60.0, (g.top + g.mh / 2) as f32);
         let r = render(&a, false);
         let rows = (g.top as usize)..((g.top + g.mh) as usize);
