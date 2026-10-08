@@ -430,12 +430,12 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
     let t = body.t;
     // mantle wobble: rows near the ruffle pointer shift sideways
     let wob_amp = (g.maxw * 0.12).max(1.0);
-    let wob = |y: i32| -> i32 {
+    let wob = |y: i32| -> f32 {
         if body.ruffle <= 0.0 {
-            return 0;
+            return 0.0;
         }
         let prox = (1.0 - (y as f32 - body.ruffle_at.1).abs() / (g.mh as f32 * 0.9)).max(0.0);
-        (body.ruffle * prox * wob_amp * (t * 14.0 + y as f32 * 0.9).sin()).round() as i32
+        body.ruffle * prox * wob_amp * (t * 14.0 + y as f32 * 0.9).sin()
     };
 
     // mantle + fins
@@ -444,12 +444,18 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
         let tt = (r as f32 + 0.5) / mh;
         let hw = (g.maxw * puff * tt.powf(0.5) * (1.0 - 0.3 * tt * tt)).max(0.5);
         let y = top + r;
-        let cx = cx + wob(y);
+        let off = wob(y);
+        let wi = off.round() as i32;
         let n = hw.round() as i32;
-        for x in -n..=n {
-            let edge = hw - (x.abs() as f32);
+        for x in (-n - 2)..=(n + 2) {
+            // sub-cell shift: edge cells fade in and out instead of jumping
+            let d = x as f32 - off;
+            let edge = hw - d.abs();
+            if edge <= -0.5 {
+                continue;
+            }
             let ch = if r == g.mh - 1 || edge < 1.0 {
-                '\u{2592}'
+                if x.abs() > n { '\u{2591}' } else { '\u{2592}' }
             } else if (r + x).rem_euclid(7) == 0 {
                 '\u{2593}'
             } else {
@@ -458,6 +464,7 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
             let c = if r == g.mh - 1 { pal.peach } else { mantle };
             cv.put(cx + x, y, ch, c);
         }
+        let cx = cx + wi;
         if rings_on && r < g.mh - 1 {
             for x in (1 - n)..n {
                 if (x + 3 * r).rem_euclid(7) == 0 {
@@ -481,10 +488,22 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
     let hwh = g.hwh * (1.0 + 0.5 * (puff - 1.0));
     for r in 0..g.hh {
         let t2 = r as f32 / g.hh as f32;
-        let n = (hwh * (1.0 - 0.25 * t2)).round() as i32;
-        let cx = cx + wob(top + g.mh + r);
-        for x in -n..=n {
-            cv.put(cx + x, top + g.mh + r, '\u{2588}', mantle);
+        let hwr = hwh * (1.0 - 0.25 * t2);
+        let n = hwr.round() as i32;
+        let off = wob(top + g.mh + r);
+        for x in (-n - 2)..=(n + 2) {
+            let cover = n as f32 + 1.0 - (x as f32 - off).abs();
+            if cover <= 0.0 {
+                continue;
+            }
+            let ch = if cover >= 1.0 {
+                '\u{2588}'
+            } else if cover >= 0.5 {
+                '\u{2592}'
+            } else {
+                '\u{2591}'
+            };
+            cv.put(cx + x, top + g.mh + r, ch, mantle);
         }
     }
     if blush > 0.0 {
@@ -508,7 +527,7 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
         } else {
             (hwh - rx as f32 * 0.4).round() as i32
         };
-        let ex = cx + wob(ey) + s * inset;
+        let ex = cx + wob(ey).round() as i32 + s * inset;
         if body.closed {
             for x in -rx..=rx {
                 cv.put(ex + x, ey, '\u{25e0}', EYE);
