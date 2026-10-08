@@ -218,6 +218,7 @@ mod tests {
             Msg::Ack,
             Msg::Nak,
             Msg::Arrive(7),
+            Msg::ArriveCat(11),
             Msg::Color(3),
             Msg::Recall,
             Msg::Home,

@@ -309,12 +309,13 @@ impl App {
     /// Dust motes drifting up through the sunbeam.
     pub(crate) fn cat_motes(&mut self, dt: f32) {
         if self.bubbles.len() < 40 && self.rng.random_range(0.0..1.0) < 2.0 * dt {
-            let (lo, hi) =
-                crate::cat_art::beam_at(self.w as i32, self.h as i32, self.h as f32 - 6.0);
-            let x = self.rng.random_range(lo..=hi.max(lo + 1.0));
+            let g = self.geo();
+            let floor = (g.top + g.mh + g.hh + g.al - 2) as f32;
+            let y = self.rng.random_range(12.0..floor.max(13.0));
+            let (lo, hi) = crate::cat_art::beam_at(self.w as i32, self.h as i32, y);
             self.bubbles.push(super::Bubble {
-                x,
-                y: self.h as f32 - 6.0 - self.rng.random_range(0.0..6.0),
+                x: self.rng.random_range(lo..=hi.max(lo + 1.0)),
+                y,
                 vy: self.rng.random_range(1.0..2.2),
                 ch: ['.', '*', '\u{b0}'][self.rng.random_range(0..3)],
                 phase: self.rng.random_range(0.0..std::f32::consts::TAU),
@@ -324,6 +325,7 @@ impl App {
             b.y -= b.vy * dt * 0.45;
             b.x -= 0.5 * b.vy * dt * 0.45;
         }
+        self.bubbles.retain(|b| b.y > 2.0);
     }
 
     pub(crate) fn cat_update(&mut self, dt: f32) {
@@ -532,5 +534,262 @@ impl App {
             Key::Pet => "Purrrr \u{2665}",
             Key::Play => "Wheee!",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{App, Key, Kind, PRESS_CAP, Ptr, State};
+    use super::*;
+    use crate::art::NONE;
+
+    fn cat(w: u16, h: u16, seed: u64) -> App {
+        let mut a = App::new(w, h, seed);
+        a.init_cat();
+        a.init_color(0, false);
+        a
+    }
+
+    /// Draw a frame; returns a cat cell and an empty-room cell.
+    fn framed(a: &mut App) -> ((u16, u16), (u16, u16)) {
+        let cv = crate::art::render(a, false);
+        a.set_hit(cv.owner.clone());
+        let w = a.w as usize;
+        let row = (a.geo().top + a.geo().mh + a.geo().hh / 2) as usize;
+        let xs: Vec<usize> = (0..w).filter(|&x| cv.owner[row * w + x] != NONE).collect();
+        ((xs[xs.len() / 2] as u16, row as u16), (w as u16 - 30, 2))
+    }
+
+    #[test]
+    fn breeds_in_spec_order_and_cycle() {
+        let names: Vec<_> = BREEDS.iter().map(|b| b.name).collect();
+        assert_eq!(
+            names,
+            [
+                "tabby",
+                "black",
+                "calico",
+                "siamese",
+                "orange",
+                "tuxedo",
+                "gray",
+                "white",
+                "maine-coon",
+                "sphynx",
+                "scottish-fold",
+                "persian"
+            ]
+        );
+        assert_eq!(parse_breed("Maine-Coon"), Some(Ok(8)));
+        assert_eq!(parse_breed("random"), Some(Err(())));
+        assert_eq!(parse_breed("dog"), None);
+        assert_eq!(random_breed(7), random_breed(7));
+        let mut a = cat(120, 40, 1);
+        a.next_color();
+        assert_eq!(a.cmsg.as_ref().unwrap().0, "I'm a black today!");
+        for _ in 0..11 {
+            a.next_color();
+        }
+        assert_eq!(a.color_idx(), 0);
+    }
+
+    #[test]
+    fn cat_press_caps_equal_squid_caps() {
+        for k in [Key::Feed, Key::Pet, Key::Play] {
+            let mut c = cat(120, 40, 1);
+            let mut s = App::new(120, 40, 1);
+            let nc = (0..10).filter(|_| c.press(k)).count();
+            let ns = (0..10).filter(|_| s.press(k)).count();
+            assert_eq!(nc, ns);
+            assert_eq!(nc, PRESS_CAP);
+        }
+        let mut c = cat(120, 40, 1);
+        assert!(c.press(Key::Feed) && c.press(Key::Pet) && c.press(Key::Play));
+        assert!(c.feed.on && c.pet.on && c.play.on);
+        assert_eq!(c.fish.len(), 1);
+        c.press(Key::Feed);
+        assert_eq!(c.fish.len(), 2);
+    }
+
+    #[test]
+    fn cat_key_messages() {
+        let mut a = cat(120, 40, 1);
+        a.press(Key::Feed);
+        assert_eq!(a.msg, Some("Yum!"));
+        a.press(Key::Pet);
+        assert_eq!(a.msg, Some("Purrrr \u{2665}"));
+        assert!(a.eyes_closed() && !a.hearts.is_empty());
+        a.press(Key::Play);
+        assert_eq!(a.msg, Some("Wheee!"));
+        assert!(a.laser_pos().is_some());
+        for _ in 0..(12 * 16) {
+            a.update(1.0 / 16.0);
+        }
+        assert!(!a.any_react());
+        assert!(a.laser_pos().is_none());
+    }
+
+    #[test]
+    fn click_drag_scroll_on_cat_and_misses() {
+        let mut a = cat(120, 40, 1);
+        let (c, off) = framed(&mut a);
+        a.pointer(Ptr::Down, off.0, off.1);
+        a.pointer(Ptr::Up, off.0, off.1);
+        a.pointer(Ptr::Scroll, off.0, off.1);
+        assert!(a.msg.is_none() && a.hearts.is_empty() && a.touch.boop == 0.0);
+        // click = boop
+        a.pointer(Ptr::Down, c.0, c.1);
+        a.pointer(Ptr::Up, c.0, c.1);
+        assert_eq!(a.msg, Some("Mrrp?"));
+        assert_eq!(a.hearts.len(), 1);
+        assert!(a.touch.boop > 0.0);
+        // drag = stroke
+        let mut b = cat(120, 40, 1);
+        let (c, _) = framed(&mut b);
+        b.pointer(Ptr::Down, c.0, c.1);
+        for i in 1..=10 {
+            b.pointer(Ptr::Drag, c.0 + i, c.1);
+            b.update(0.06);
+        }
+        assert_eq!(b.msg, Some("Purrrr \u{2665}"));
+        assert!(b.hearts.len() >= 4 && b.eyes_closed() && b.blush() > 0.0);
+        assert!(b.cat_host_body().lean != 0.0);
+        // scroll = ruffle, no hearts
+        let mut d = cat(120, 40, 1);
+        let (c, _) = framed(&mut d);
+        d.pointer(Ptr::Scroll, c.0, c.1);
+        assert_eq!(d.msg, Some("Mrow~"));
+        assert!(d.hearts.is_empty() && d.touch.ruffle > 0.0 && !d.pet.on);
+    }
+
+    #[test]
+    fn idle_behaviors_all_appear_within_three_minutes() {
+        let mut a = cat(120, 40, 1);
+        let (mut stretch, mut groom, mut ear, mut sneeze, mut moved) =
+            (false, false, false, false, false);
+        let x0 = a.offset().0;
+        for _ in 0..(180 * 16) {
+            a.update(1.0 / 16.0);
+            stretch |= a.state == State::IdleBehavior(Behavior::Stretch);
+            groom |= a.state == State::IdleBehavior(Behavior::Groom);
+            sneeze |= a.state == State::IdleBehavior(Behavior::InkPuff);
+            ear |= a.cat.ear_t > 0.0;
+            moved |= (a.offset().0 - x0).abs() > 3.0;
+        }
+        assert!(stretch && groom && ear && sneeze && moved);
+    }
+
+    #[test]
+    fn cat_walks_sideways_over_two_minutes() {
+        let mut a = cat(120, 40, 1);
+        let mut xs = vec![];
+        for i in 0..(120 * 16) {
+            a.update(1.0 / 16.0);
+            if i % 16 == 0 {
+                xs.push(a.offset().0);
+            }
+        }
+        let (lo, hi) = xs
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(l, h), &x| (l.min(x), h.max(x)));
+        assert!(hi - lo > 4.0, "{lo} {hi}");
+    }
+
+    #[test]
+    fn ascii_has_no_wide_glyphs_and_markings_survive() {
+        for (i, br) in BREEDS.iter().enumerate() {
+            let mut a = cat(120, 40, 1);
+            a.init_color(i, false);
+            for _ in 0..40 {
+                a.update(0.0625);
+            }
+            let cv = crate::art::render(&a, true);
+            assert!(cv.cells.iter().all(|c| c.ch.is_ascii()), "{}", br.name);
+        }
+        let mut a = cat(120, 40, 1);
+        a.mono = true;
+        let cv = crate::art::render(&a, true);
+        let s: String = cv.cells.iter().map(|c| c.ch).collect();
+        assert!(s.matches('%').count() > 40, "tabby stripes as glyphs");
+        let mut b = cat(120, 40, 1);
+        b.init_color(1, false);
+        let s2: String = crate::art::render(&b, true)
+            .cells
+            .iter()
+            .map(|c| c.ch)
+            .collect();
+        assert!(s.matches('%').count() > s2.matches('%').count() + 20);
+    }
+
+    #[test]
+    fn every_breed_fits_without_clipping() {
+        for (w, h) in [(120u16, 40u16), (300, 90), (80, 24)] {
+            for (i, br) in BREEDS.iter().enumerate() {
+                let mut a = cat(w, h, 1);
+                a.init_color(i, false);
+                let cv = crate::art::render(&a, false);
+                for y in 0..h as usize {
+                    for x in 0..w as usize {
+                        if cv.owner[y * w as usize + x] != NONE {
+                            assert!(
+                                y >= 1 && y < h as usize - 2 && x >= 1 && x < w as usize - 1,
+                                "{} at {w}x{h}: cell {x},{y}",
+                                br.name
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn breeds_draw_differently() {
+        let mut seen = std::collections::HashSet::new();
+        for (i, br) in BREEDS.iter().enumerate() {
+            let mut a = cat(120, 40, 1);
+            a.init_color(i, false);
+            let cv = crate::art::render(&a, false);
+            let sig: Vec<_> = cv.cells.iter().map(|c| (c.ch, c.fg)).collect();
+            assert!(seen.insert(format!("{sig:?}")), "{}", br.name);
+        }
+    }
+
+    #[test]
+    fn cat_and_squid_visit_each_other() {
+        let mut h = App::new(120, 40, 1);
+        h.enable_social(1);
+        h.on_msg(2, crate::link::Msg::ArriveCat(2));
+        for _ in 0..200 {
+            h.on_msg(
+                2,
+                crate::link::Msg::Hello {
+                    away: true,
+                    accept: true,
+                },
+            );
+            h.update(0.06);
+        }
+        assert_eq!(h.guests.len(), 1);
+        assert_eq!(h.guests[0].kind, Kind::Cat);
+        let cv = crate::art::render(&h, false);
+        assert!(cv.owner.contains(&0) && cv.owner.contains(&1));
+        let mut c = cat(120, 40, 1);
+        c.enable_social(3);
+        c.on_msg(4, crate::link::Msg::Arrive(2));
+        for _ in 0..200 {
+            c.on_msg(
+                4,
+                crate::link::Msg::Hello {
+                    away: true,
+                    accept: true,
+                },
+            );
+            c.update(0.06);
+        }
+        assert_eq!(c.guests[0].kind, Kind::Squid);
+        assert!(c.note.is_none() || c.note.as_ref().unwrap().0.contains("friend"));
+        let cv = crate::art::render(&c, false);
+        assert!(cv.owner.contains(&0) && cv.owner.contains(&1));
     }
 }

@@ -192,6 +192,7 @@ fn asciify(c: char) -> char {
         '\u{2665}' => 'v',
         '\u{25e0}' => '^',
         '\u{25cf}' => '*',
+        '\u{25bc}' => 'v',
         '\u{25cb}' => 'o',
         '\u{b0}' => '\'',
         c if c.is_ascii() => c,

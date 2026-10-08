@@ -310,7 +310,7 @@ pub fn draw_cat(cv: &mut Canvas, body: &Body, mono: bool) {
             0.0
         };
     let feet0 = g.top as f32 + tot0;
-    let y0 = (feet0 - t).max(1.0) + body.dy.round() + walk_bob;
+    let y0 = (feet0 - t).max(3.0) + body.dy.round() + walk_bob;
     let ruff_ear = if body.ruffle > 0.3 {
         (body.t * 20.0).sin()
     } else {
@@ -462,7 +462,7 @@ pub fn draw_cat(cv: &mut Canvas, body: &Body, mono: bool) {
             continue;
         }
         let tipx = hcx + side * (0.60 * ha + 0.8 * f);
-        let tipy = hcy - hb - ear_h * 0.55 + f * 1.2;
+        let tipy = (hcy - hb - ear_h * 0.55 + f * 1.2).max(y0 - 1.0);
         let basex = hcx + side * 0.42 * ha;
         let basey = hcy - hb * 0.55;
         p.ear(tipx, tipy, basex, basey, ear_w);
