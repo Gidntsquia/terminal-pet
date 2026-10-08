@@ -414,7 +414,37 @@ impl App {
         self.hit = owner;
     }
 
+    /// Like `owner_at`, but while a squid is ruffling its tentacles sway faster than the
+    /// hit map refreshes, so accept a click within 2 cells of it.
     fn who_at(&self, col: u16, row: u16) -> Option<Who> {
+        if let Some(w) = self.owner_at(col, row) {
+            return Some(w);
+        }
+        let swaying =
+            self.touch.ruffle_lvl > 0.0 || self.guests.iter().any(|g| g.touch.ruffle_lvl > 0.0);
+        if !swaying {
+            return None;
+        }
+        for r in 1..=2i32 {
+            for dy in -r..=r {
+                for dx in -r..=r {
+                    if dx.abs().max(dy.abs()) != r {
+                        continue;
+                    }
+                    let (c, y) = (col as i32 + dx, row as i32 + dy);
+                    if c >= 0
+                        && y >= 0
+                        && let Some(w) = self.owner_at(c as u16, y as u16)
+                    {
+                        return Some(w);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn owner_at(&self, col: u16, row: u16) -> Option<Who> {
         if col >= self.w || row >= self.h || self.hit.len() != self.w as usize * self.h as usize {
             return None;
         }
