@@ -237,7 +237,7 @@ pub struct App {
     pub pet: React,
     pub play: React,
     pub fish: Vec<Fish>,
-    presses: [Vec<f32>; 3],
+    presses: [Vec<f32>; 6],
     dart_s: f32,
     dart_from: (f32, f32),
     pub target: (f32, f32),
@@ -310,7 +310,7 @@ impl App {
             pet: React::default(),
             play: React::default(),
             fish: vec![],
-            presses: [vec![], vec![], vec![]],
+            presses: Default::default(),
             dart_s: 99.0,
             dart_from: (0.0, 0.0),
             target: (0.0, 0.0),
@@ -480,7 +480,7 @@ impl App {
                             self.touch_of(old).held = false;
                         }
                         d.on = Some(w);
-                        d.counted = self.count_press(Key::Pet);
+                        d.counted = self.count_slot(4);
                         d.acc = 0.0;
                         d.last = (col, row);
                         if d.counted {
@@ -534,7 +534,7 @@ impl App {
                 }
                 if !d.moved
                     && let Some(w) = d.start
-                    && self.count_press(Key::Pet)
+                    && self.count_slot(3)
                 {
                     self.touch_of(w).boop = BOOP;
                     self.add_heart(col, row);
@@ -545,7 +545,7 @@ impl App {
                 let Some(w) = who else {
                     return;
                 };
-                if !self.count_press(Key::Pet) {
+                if !self.count_slot(5) {
                     return;
                 }
                 let t = self.touch_of(w);
@@ -579,8 +579,13 @@ impl App {
 
     /// Seconds of unused window: true if the press counts (at most 5 per key per 3 s).
     fn count_press(&mut self, k: Key) -> bool {
+        self.count_slot(k.idx())
+    }
+
+    /// Mouse gestures (3 = boop, 4 = stroke, 5 = ruffle) have their own caps so they combine.
+    fn count_slot(&mut self, slot: usize) -> bool {
         let t = self.t;
-        let p = &mut self.presses[k.idx()];
+        let p = &mut self.presses[slot];
         p.retain(|&x| t - x < PRESS_WINDOW);
         if p.len() >= PRESS_CAP {
             return false;
