@@ -428,6 +428,15 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
     let mantle = lerp(pal.mantle, pal.flush, blush);
     let arm = lerp(pal.arm, pal.flush, blush * 0.6);
     let t = body.t;
+    // mantle wobble: rows near the ruffle pointer shift sideways
+    let wob_amp = (g.maxw * 0.12).max(1.0);
+    let wob = |y: i32| -> i32 {
+        if body.ruffle <= 0.0 {
+            return 0;
+        }
+        let prox = (1.0 - (y as f32 - body.ruffle_at.1).abs() / (g.mh as f32 * 0.9)).max(0.0);
+        (body.ruffle * prox * wob_amp * (t * 14.0 + y as f32 * 0.9).sin()).round() as i32
+    };
 
     // mantle + fins
     let mh = g.mh as f32;
@@ -435,6 +444,7 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
         let tt = (r as f32 + 0.5) / mh;
         let hw = (g.maxw * puff * tt.powf(0.5) * (1.0 - 0.3 * tt * tt)).max(0.5);
         let y = top + r;
+        let cx = cx + wob(y);
         let n = hw.round() as i32;
         for x in -n..=n {
             let edge = hw - (x.abs() as f32);
@@ -472,6 +482,7 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
     for r in 0..g.hh {
         let t2 = r as f32 / g.hh as f32;
         let n = (hwh * (1.0 - 0.25 * t2)).round() as i32;
+        let cx = cx + wob(top + g.mh + r);
         for x in -n..=n {
             cv.put(cx + x, top + g.mh + r, '\u{2588}', mantle);
         }
@@ -497,7 +508,7 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
         } else {
             (hwh - rx as f32 * 0.4).round() as i32
         };
-        let ex = cx + s * inset;
+        let ex = cx + wob(ey) + s * inset;
         if body.closed {
             for x in -rx..=rx {
                 cv.put(ex + x, ey, '\u{25e0}', EYE);
@@ -569,10 +580,14 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
                     .max(0.0)
                     .sqrt()
                     .max(0.35)
-                    * (1.0 - (y as f32 - body.ruffle_at.1).abs() / (g.al as f32 * 1.5))
-                        .max(0.0)
-                        .sqrt()
-                        .max(0.35);
+                    * if body.ruffle_at.1 < y0 as f32 {
+                        1.0
+                    } else {
+                        (1.0 - (y as f32 - body.ruffle_at.1).abs() / (g.al as f32 * 1.5))
+                            .max(0.0)
+                            .sqrt()
+                            .max(0.35)
+                    };
                 x += body.ruffle
                     * prox
                     * 4.0
@@ -757,5 +772,25 @@ mod golden {
             }
         }
         assert_eq!(h, 5248091251924366442);
+    }
+}
+
+#[cfg(test)]
+mod ruffle_tests {
+    use super::*;
+
+    #[test]
+    fn mantle_scroll_wobbles_mantle() {
+        let mut a = App::new(120, 40, 7);
+        let base = render(&a, false);
+        let g = geo_s(120, 40, 1.0);
+        a.touch.ruffle = 1.0;
+        a.touch.ruffle_at = (60.0, (g.top + g.mh / 2) as f32);
+        let r = render(&a, false);
+        let rows = (g.top as usize)..((g.top + g.mh) as usize);
+        assert!(
+            rows.into_iter()
+                .any(|y| (0..r.w).any(|x| r.cells[y * r.w + x].fg != base.cells[y * r.w + x].fg))
+        );
     }
 }
