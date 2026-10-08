@@ -154,9 +154,9 @@ impl Touch {
         self.boop = (self.boop - dt).max(0.0);
         self.ruffle = (self.ruffle - dt).max(0.0);
         let rate = if self.ruffle > 0.0 {
-            dt / 0.5
+            dt / 1.0
         } else {
-            -dt / 0.8
+            -dt / 1.6
         };
         self.ruffle_lvl = (self.ruffle_lvl + rate).clamp(0.0, 1.0);
         self.stroke = (self.stroke - dt).max(0.0);
