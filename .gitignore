@@ -1,3 +1,6 @@
 target/
 .env
 plans/
+
+# GitHub wiki clone (its own repo)
+/wiki/

@@ -922,16 +922,43 @@ impl App {
                         let sign = if d >= 0.0 { 1.0 } else { -1.0 };
                         let dist = d.abs().max(10.0);
                         let from_cat = self.kind_of(ctl.parts[from]) == Kind::Cat;
-                        let saved = self.kind;
-                        self.kind = if from_cat { Kind::Cat } else { Kind::Squid };
-                        self.spawn_ink_v(
-                            pos[from] + sign * g.maxw * 0.6,
-                            y,
-                            26,
-                            sign * dist * 2.4,
-                            3.0,
-                        );
-                        self.kind = saved;
+                        let to_pid = ctl.parts[to];
+                        if from_cat {
+                            // the cat's turn: it throws the toy mouse
+                            self.flyers.push(Flyer {
+                                x: pos[from] + sign * g.maxw * 0.6,
+                                y: g_floor(self) as f32,
+                                vx: sign * 45.0,
+                                ink: false,
+                                mouse: true,
+                                hit_x: (to_pid == self.pid).then_some(pos[to]),
+                                target: (to_pid != self.pid).then_some(to_pid),
+                            });
+                        } else {
+                            let saved = self.kind;
+                            self.kind = Kind::Squid;
+                            self.spawn_ink_v(
+                                pos[from] + sign * g.maxw * 0.6,
+                                y,
+                                26,
+                                sign * dist * 2.4,
+                                3.0,
+                            );
+                            self.kind = saved;
+                            if self.kind_of(to_pid) == Kind::Cat {
+                                if to_pid == self.pid {
+                                    self.splat = Some((2.0, 0.0));
+                                    self.state = State::IdleBehavior(Behavior::InkPuff);
+                                    self.st = 0.0;
+                                    self.cat_sneeze();
+                                } else if let Some(gu) =
+                                    self.guests.iter_mut().find(|gu| gu.pid == to_pid)
+                                {
+                                    gu.splat = Some((2.0, 0.0));
+                                }
+                                self.note("Pfft!", 2.0);
+                            }
+                        }
                     }
                 }
             }
