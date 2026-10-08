@@ -200,6 +200,7 @@ pub enum Who {
 
 struct Drag {
     start: Option<Who>,
+    origin: (u16, u16),
     moved: bool,
     on: Option<Who>,
     counted: bool,
@@ -492,6 +493,7 @@ impl App {
             Ptr::Down => {
                 self.drag = Some(Drag {
                     start: who,
+                    origin: (col, row),
                     moved: false,
                     on: None,
                     counted: false,
@@ -503,7 +505,10 @@ impl App {
                 let Some(mut d) = self.drag.take() else {
                     return;
                 };
-                d.moved = true;
+                // a one-cell wobble of the hand is still a click
+                if col.abs_diff(d.origin.0).max(row.abs_diff(d.origin.1)) > 1 {
+                    d.moved = true;
+                }
                 if let Some(w) = who {
                     if d.on != Some(w) {
                         if let Some(old) = d.on {
