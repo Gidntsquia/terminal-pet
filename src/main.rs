@@ -206,6 +206,20 @@ fn run(ascii: bool, seed: u64, mode: Mode, choice: ColorChoice, solo: bool) -> i
                             }
                             _ => None,
                         };
+                        if let Some(path) = std::env::var_os("SQUID_MOUSE_LOG") {
+                            use std::io::Write;
+                            if let Ok(mut f) = std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(path)
+                            {
+                                let _ = writeln!(
+                                    f,
+                                    "{:.3} {:?} col={} row={} boops_before={}",
+                                    app.t, m.kind, m.column, m.row, app.touch.boop
+                                );
+                            }
+                        }
                         if let Some(ev) = ev {
                             app.pointer(ev, m.column, m.row);
                             force = true;
