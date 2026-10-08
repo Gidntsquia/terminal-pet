@@ -146,7 +146,11 @@ pub struct Canvas {
     pub h: usize,
     pub cells: Vec<Cell>,
     pub ascii: bool,
+    /// Which body (index into `App::bodies`) drew each cell; `NONE` for none.
+    pub owner: Vec<u8>,
 }
+
+pub const NONE: u8 = 255;
 
 impl Canvas {
     pub fn new(w: u16, h: u16, ascii: bool) -> Self {
@@ -155,6 +159,7 @@ impl Canvas {
             h: h as usize,
             cells: vec![Cell { ch: ' ', fg: None }; w as usize * h as usize],
             ascii,
+            owner: vec![NONE; w as usize * h as usize],
         }
     }
     pub fn put(&mut self, x: i32, y: i32, ch: char, c: Rgb) {
@@ -255,6 +260,11 @@ pub struct Body {
     pub lean: f32,
     pub food_x: f32,
     pub t: f32,
+    /// Mouse touch: curl strength, pointer cell, ruffle strength, ruffle cell.
+    pub touch: f32,
+    pub touch_at: (f32, f32),
+    pub ruffle: f32,
+    pub ruffle_at: (f32, f32),
     /// Floating label (e.g. "guest") and its top-row x.
     pub tag: Option<&'static str>,
 }
@@ -286,8 +296,8 @@ pub fn render(app: &App, ascii: bool) -> Canvas {
     draw_world(&mut cv, app);
     draw_bubbles(&mut cv, app);
     let bodies = app.bodies();
-    for b in &bodies {
-        draw_squid(&mut cv, b, app);
+    for (i, b) in bodies.iter().enumerate() {
+        draw_squid(&mut cv, b, app, i as u8);
     }
     draw_fx(&mut cv, app);
     for b in &bodies {
@@ -385,7 +395,7 @@ fn draw_fx(cv: &mut Canvas, app: &App) {
 }
 
 /// Draw the squid on a scratch canvas, then shear it (diagonal lean) onto `cv`.
-fn draw_squid(cv: &mut Canvas, body: &Body, app: &App) {
+fn draw_squid(cv: &mut Canvas, body: &Body, app: &App, id: u8) {
     let mut sq = Canvas::new(app.w, app.h, cv.ascii);
     draw_squid_upright(&mut sq, body, app.mono);
     let mid = app.h as f32 * 0.4;
@@ -398,6 +408,7 @@ fn draw_squid(cv: &mut Canvas, body: &Body, app: &App) {
                 let nx = x as i32 + s;
                 if nx >= 0 && (nx as usize) < cv.w {
                     cv.cells[y * cv.w + nx as usize] = c;
+                    cv.owner[y * cv.w + nx as usize] = id;
                 }
             }
         }
@@ -476,7 +487,13 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
     // eyes
     // slit eyes on the head edge: round ring, dark centre, shine; scaled by head height
     let ry = (((g.hh - 1) as f32 / 3.0).round() as i32).max(1);
-    let rx = if g.hh <= 4 { 2 } else { g.hh - 1 };
+    let rx = if g.hh <= 4 {
+        2
+    } else if ry == 1 {
+        g.hh - 1
+    } else {
+        (g.hh as f32 * 0.6).round() as i32
+    };
     let ring_at = 0.7;
     let ey = top + g.mh + g.hh / 2;
     let look = body.look;
@@ -484,7 +501,9 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
         let inset = if ry == 1 {
             (hwh * 0.95).round() as i32
         } else {
-            (hwh - rx as f32 * 0.4).round() as i32
+            // large eyes sit fully inside the head outline, one cell from its edge
+            let low = (g.hh / 2 + ry) as f32 / g.hh as f32;
+            ((hwh * (1.0 - 0.25 * low)).round() as i32 - rx - 1).max(0)
         };
         let ex = cx + s * inset;
         if body.closed {
@@ -526,6 +545,10 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
     // arms + 2 long tentacles
     let curl = body.curl;
     let fx = body.food_x;
+    // pointer columns in the unsheared drawing (the lean shear is applied afterwards)
+    let unshear = |at: (f32, f32)| at.0 - ((at.1 - cv.h as f32 * 0.4) * body.lean).round();
+    let pxu = unshear(body.touch_at);
+    let rxu = unshear(body.ruffle_at);
     for i in 0..10 {
         let tentacle = i >= 8;
         let (base, len) = if tentacle {
@@ -544,10 +567,19 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
                 + base * (1.0 + 2.4 * d)
                 + amp * d * (t * 2.2 - d * 5.0 + i as f32 * 0.9).sin();
             x += (fx - x) * curl * d;
+            let y = y0 + k;
+            if body.touch > 0.0 {
+                let prox = (1.0 - (x - pxu).abs() / (g.maxw * 0.8)).max(0.0);
+                x += (pxu - x) * body.touch * prox * d.sqrt();
+            }
+            if body.ruffle > 0.0 {
+                let prox = (1.0 - (x - rxu).abs() / (g.maxw * 0.7)).max(0.0)
+                    * (1.0 - (y as f32 - body.ruffle_at.1).abs() / (g.al as f32 * 0.7)).max(0.0);
+                x += body.ruffle * prox * 2.5 * (t * 20.0 + k as f32 * 1.1 + i as f32).sin();
+            }
             let xi = x.round() as i32;
             let slope = x - prev;
             prev = x;
-            let y = y0 + k;
             let club = tentacle && d > 0.85;
             let (ch, c) = if k % 3 == 2 && d > 0.2 {
                 if rings_on {
@@ -723,5 +755,40 @@ mod golden {
             }
         }
         assert_eq!(h, 5248091251924366442);
+    }
+}
+
+#[cfg(test)]
+mod eyes {
+    use super::*;
+    #[test]
+    fn large_eyes_stay_inside_the_head() {
+        for (w, h) in [(160u16, 50u16), (200, 60), (300, 90), (400, 120)] {
+            let app = App::new(w, h, 7);
+            let cv = render(&app, false);
+            let g = geo(w, h);
+            let cx = w as i32 / 2;
+            let mut seen = 0;
+            for y in 0..cv.h {
+                let (mut lo, mut hi) = (i32::MAX, i32::MIN);
+                for x in 0..cv.w {
+                    let c = cv.cells[y * cv.w + x];
+                    if matches!(c.fg, Some(EYE) | Some(EYE_RING) | Some(WHITE)) {
+                        seen += 1;
+                        lo = lo.min(x as i32);
+                        hi = hi.max(x as i32);
+                    }
+                }
+                if lo <= hi {
+                    let head = |yy: usize| {
+                        let t2 = (yy as i32 - g.mh) as f32 / g.hh as f32;
+                        (g.hwh * (1.0 - 0.25 * t2)).round() as i32
+                    };
+                    assert!(hi - cx <= head(y), "{w}x{h} row {y}");
+                    assert!(cx - lo <= head(y), "{w}x{h} row {y}");
+                }
+            }
+            assert!(seen > 0);
+        }
     }
 }

@@ -65,6 +65,7 @@ pub struct Guest {
     pub t0: f32,
     pub tag: f32,
     pub fx: Fx,
+    pub touch: crate::app::Touch,
 }
 
 pub enum In {
@@ -442,6 +443,7 @@ impl App {
             t0,
             tag: 3.0,
             fx: Fx::default(),
+            touch: Default::default(),
         });
         self.note(&format!("A {} friend is here!", PRESETS[color].0), 3.0);
     }
@@ -766,7 +768,12 @@ impl App {
                         for _ in 0..count {
                             let x = mid + self.vrng.random_range(-3.0..=3.0);
                             let age = -self.vrng.random_range(0.0..0.5);
-                            self.hearts.push(Heart { x, y, age });
+                            self.hearts.push(Heart {
+                                x,
+                                y,
+                                age,
+                                life: 2.0,
+                            });
                         }
                     }
                 }
@@ -924,21 +931,25 @@ impl App {
             pal: PRESETS[g.color].1,
             cx,
             dx: g.x - cx as f32 + g.fx.dx,
-            dy: 1.0 + 0.6 * (tt * 0.35).sin() + g.fx.dy,
+            dy: 1.0 + 0.6 * (tt * 0.35).sin() + g.fx.dy + g.touch.dy(),
             scale: self.scale,
             puff: 1.0,
             curl: 0.0,
-            blush: 0.0,
+            blush: (g.touch.stroke / 0.5).min(1.0),
             flash: 0.0,
             bright: g.fx.bright,
             dark: g.fx.dark,
             look: 0,
-            closed: false,
+            closed: g.touch.stroke > 0.0,
             blink: tt % 5.0 < 0.15,
             yawn: false,
-            lean: 0.2,
+            lean: 0.2 + g.touch.lean(),
             food_x: g.x,
             t: tt,
+            touch: ease(g.touch.touch),
+            touch_at: g.touch.at,
+            ruffle: g.touch.ruffle_k(),
+            ruffle_at: g.touch.ruffle_at,
             tag: (g.tag > 0.0).then_some("guest"),
         }
     }

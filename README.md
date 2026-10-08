@@ -19,6 +19,8 @@ squid-pet
 
 Press `f` to feed, `p` to pet, `space` to play, `c` to fade to the next color, `v` to send your squid to visit another squid-pet, and `q`, `Esc` or Ctrl-C to quit.
 
+The mouse works too: click the squid to boop it, drag across it to stroke it (hearts, a lean toward your hand, curling tentacles), and scroll over it to ruffle its tentacles. Visiting guests react in their own color. Mouse capture is on by default; use `--no-mouse` to keep your terminal's own text selection.
+
 On Linux x86_64 you can skip Rust and download a prebuilt binary from the [releases page](https://github.com/Gidntsquia/squid-pet/releases).
 
 Other commands:
@@ -26,6 +28,7 @@ Other commands:
 ```
 squid-pet --ascii      # Draws without Unicode glyphs
 squid-pet --solo       # Don't look for other squid-pets
+squid-pet --no-mouse   # Don't capture the mouse
 squid-pet --seed 42    # Same random behavior every run
 squid-pet --color purple   # red, purple, blue, pink, green, gold, ghost, blue-ringed
 squid-pet --color random   # Picks a color at launch (respects --seed)

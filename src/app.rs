@@ -40,7 +40,7 @@ impl Key {
             Key::Play => 3.4,
         }
     }
-    fn msg(self) -> &'static str {
+    pub fn msg(self) -> &'static str {
         match self {
             Key::Feed => "Yum!",
             Key::Pet => "Blub blub \u{2665}",
@@ -84,6 +84,7 @@ pub struct Heart {
     pub x: f32,
     pub y: f32,
     pub age: f32,
+    pub life: f32,
 }
 pub struct Ink {
     pub x: f32,
@@ -121,6 +122,74 @@ pub fn parse_color(s: &str) -> Option<ColorChoice> {
 /// Preset picked by `--color random` for a seed.
 pub fn random_preset(seed: u64) -> usize {
     StdRng::seed_from_u64(seed).random_range(0..PRESETS.len())
+}
+
+/// Mouse reaction state for one squid (the host's or a guest's).
+#[derive(Clone, Copy, Default, Debug)]
+pub struct Touch {
+    /// Seconds left in a boop bounce.
+    pub boop: f32,
+    /// 0..1 curl toward the pointer; follows `held`.
+    pub touch: f32,
+    pub held: bool,
+    pub at: (f32, f32),
+    /// -1..1: pointer side relative to the squid's center.
+    pub dir: f32,
+    /// Seconds of ruffle left, and where.
+    pub ruffle: f32,
+    pub ruffle_at: (f32, f32),
+    /// Guests only: seconds of closed eyes and blush left.
+    pub stroke: f32,
+}
+
+pub const BOOP: f32 = 0.4;
+pub const RUFFLE_NOTCH: f32 = 0.8;
+
+impl Touch {
+    pub fn update(&mut self, dt: f32) {
+        self.boop = (self.boop - dt).max(0.0);
+        self.ruffle = (self.ruffle - dt).max(0.0);
+        self.stroke = (self.stroke - dt).max(0.0);
+        let d = if self.held { dt / 0.25 } else { -dt };
+        self.touch = (self.touch + d).clamp(0.0, 1.0);
+    }
+    /// Downward dip (cells) of the boop bounce.
+    pub fn dy(&self) -> f32 {
+        if self.boop <= 0.0 {
+            return 0.0;
+        }
+        2.0 * (std::f32::consts::PI * (1.0 - self.boop / BOOP)).sin()
+    }
+    pub fn lean(&self) -> f32 {
+        -0.5 * self.dir * ease(self.touch)
+    }
+    pub fn ruffle_k(&self) -> f32 {
+        (self.ruffle / 0.4).min(1.0)
+    }
+}
+
+/// A mouse event the app reacts to (left button only for Down/Up/Drag).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ptr {
+    Down,
+    Up,
+    Drag,
+    Scroll,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Who {
+    Host,
+    Guest(usize),
+}
+
+struct Drag {
+    start: Option<Who>,
+    moved: bool,
+    on: Option<Who>,
+    counted: bool,
+    last: (u16, u16),
+    acc: f32,
 }
 
 const FADE: f32 = 0.5;
@@ -186,6 +255,11 @@ pub struct App {
     pub(crate) hello_t: f32,
     pub(crate) play_ctl: Option<crate::social::PlayCtl>,
     pub(crate) bag: Vec<crate::social::Mv>,
+    pub touch: Touch,
+    drag: Option<Drag>,
+    msg_t: f32,
+    /// Which body drew each cell in the last frame (see `art::Canvas::owner`).
+    hit: Vec<u8>,
 }
 
 const BURST: f32 = 1.8;
@@ -252,6 +326,10 @@ impl App {
             hello_t: 0.0,
             play_ctl: None,
             bag: vec![],
+            touch: Touch::default(),
+            drag: None,
+            msg_t: 0.0,
+            hit: vec![],
         }
     }
 
@@ -308,6 +386,168 @@ impl App {
     pub fn resize(&mut self, w: u16, h: u16) {
         self.w = w;
         self.h = h;
+        self.hit.clear();
+        self.drag = None;
+        self.touch.held = false;
+        for g in &mut self.guests {
+            g.touch.held = false;
+        }
+    }
+
+    /// Record which body drew each cell in the frame just drawn.
+    pub fn set_hit(&mut self, owner: Vec<u8>) {
+        self.hit = owner;
+    }
+
+    fn who_at(&self, col: u16, row: u16) -> Option<Who> {
+        if col >= self.w || row >= self.h || self.hit.len() != self.w as usize * self.h as usize {
+            return None;
+        }
+        let o = self.hit[row as usize * self.w as usize + col as usize];
+        if o == crate::art::NONE {
+            return None;
+        }
+        let o = o as usize;
+        if o < self.guests.len() {
+            Some(Who::Guest(o))
+        } else if matches!(self.home, Home::Away { .. } | Home::Leaving { .. }) {
+            None
+        } else {
+            Some(Who::Host)
+        }
+    }
+
+    fn touch_of(&mut self, w: Who) -> &mut Touch {
+        match w {
+            Who::Host => &mut self.touch,
+            Who::Guest(i) => &mut self.guests[i].touch,
+        }
+    }
+
+    fn set_msg(&mut self, m: &'static str) {
+        self.msg = Some(m);
+        self.msg_t = 1.5;
+    }
+
+    fn add_heart(&mut self, col: u16, row: u16) {
+        if self.hearts.len() < 60 {
+            self.hearts.push(Heart {
+                x: col as f32,
+                y: row as f32,
+                age: 0.0,
+                life: 1.2,
+            });
+        }
+    }
+
+    /// A mouse event at a cell. Misses (water, text, effects) do nothing.
+    pub fn pointer(&mut self, ev: Ptr, col: u16, row: u16) {
+        let who = self.who_at(col, row);
+        match ev {
+            Ptr::Down => {
+                self.drag = Some(Drag {
+                    start: who,
+                    moved: false,
+                    on: None,
+                    counted: false,
+                    last: (col, row),
+                    acc: 0.0,
+                });
+            }
+            Ptr::Drag => {
+                let Some(mut d) = self.drag.take() else {
+                    return;
+                };
+                d.moved = true;
+                if let Some(w) = who {
+                    if d.on != Some(w) {
+                        if let Some(old) = d.on {
+                            self.touch_of(old).held = false;
+                        }
+                        d.on = Some(w);
+                        d.counted = self.count_press(Key::Pet);
+                        d.acc = 0.0;
+                        d.last = (col, row);
+                        if d.counted {
+                            self.add_heart(col, row);
+                        }
+                    }
+                    let (cx, half) = match w {
+                        Who::Host => (self.geo().cx as f32 + self.offset().0, self.geo().maxw),
+                        Who::Guest(i) => (self.guests[i].x, self.geo().maxw),
+                    };
+                    let t = self.touch_of(w);
+                    t.held = true;
+                    t.at = (col as f32, row as f32);
+                    t.dir = ((col as f32 - cx) / half).clamp(-1.0, 1.0);
+                    if d.counted {
+                        let step = (col.abs_diff(d.last.0)).max(row.abs_diff(d.last.1));
+                        d.acc += step as f32;
+                        d.last = (col, row);
+                        while d.acc >= 2.0 {
+                            d.acc -= 2.0;
+                            self.add_heart(col, row);
+                        }
+                        self.set_msg(Key::Pet.msg());
+                        match w {
+                            Who::Host => {
+                                let p = &mut self.pet;
+                                if p.on {
+                                    p.dur = p.dur.max(p.st + 1.0);
+                                } else {
+                                    *p = React {
+                                        on: true,
+                                        st: 0.0,
+                                        dur: 1.0,
+                                    };
+                                }
+                            }
+                            Who::Guest(i) => self.guests[i].touch.stroke = 1.0,
+                        }
+                    }
+                } else if let Some(old) = d.on.take() {
+                    self.touch_of(old).held = false;
+                }
+                self.drag = Some(d);
+            }
+            Ptr::Up => {
+                let Some(d) = self.drag.take() else {
+                    return;
+                };
+                if let Some(w) = d.on {
+                    self.touch_of(w).held = false;
+                }
+                if !d.moved
+                    && let Some(w) = d.start
+                    && self.count_press(Key::Pet)
+                {
+                    self.touch_of(w).boop = BOOP;
+                    self.add_heart(col, row);
+                    self.set_msg("Boop!");
+                }
+            }
+            Ptr::Scroll => {
+                let Some(w) = who else {
+                    return;
+                };
+                if !self.count_press(Key::Pet) {
+                    return;
+                }
+                let t = self.touch_of(w);
+                t.ruffle = (t.ruffle + RUFFLE_NOTCH).min(3.0 * RUFFLE_NOTCH);
+                t.ruffle_at = (col as f32, row as f32);
+                self.set_msg("Hehe~");
+                for _ in 0..self.rng.random_range(1..=2) {
+                    self.bubbles.push(Bubble {
+                        x: col as f32 + self.rng.random_range(-1.0..=1.0),
+                        y: row as f32,
+                        vy: self.rng.random_range(2.0..5.0),
+                        ch: ['o', 'O', '\u{b0}'][self.rng.random_range(0..3)],
+                        phase: self.rng.random_range(0.0..std::f32::consts::TAU),
+                    });
+                }
+            }
+        }
     }
 
     pub fn any_react(&self) -> bool {
@@ -358,7 +598,12 @@ impl App {
                     let x = self.spawn_x() + self.rng.random_range(-g.hwh..=g.hwh);
                     let y = (g.top + g.mh / 2) as f32;
                     let age = -self.rng.random_range(0.0..0.6);
-                    self.hearts.push(Heart { x, y, age });
+                    self.hearts.push(Heart {
+                        x,
+                        y,
+                        age,
+                        life: 2.0,
+                    });
                 }
             }
             Key::Play => {
@@ -548,7 +793,7 @@ impl App {
                 h.y -= 4.0 * dt;
             }
         }
-        self.hearts.retain(|h| h.age < 2.0);
+        self.hearts.retain(|h| h.age < h.life);
         for i in &mut self.ink {
             i.age += dt;
             i.x += i.vx * dt;
@@ -559,6 +804,16 @@ impl App {
         }
         self.ink.retain(|i| i.age < i.life);
         self.jolt = (self.jolt - dt).max(0.0);
+        self.touch.update(dt);
+        for g in &mut self.guests {
+            g.touch.update(dt);
+        }
+        if self.msg_t > 0.0 {
+            self.msg_t -= dt;
+            if self.msg_t <= 0.0 && !self.any_react() {
+                self.msg = None;
+            }
+        }
         self.update_flyers(dt);
         if self.social {
             self.social_update(dt);
@@ -647,7 +902,7 @@ impl App {
         };
         (
             px + self.wander() + self.host_dx + self.home_ox() + self.fx.dx,
-            bob + py + jolt + self.fx.dy,
+            bob + py + jolt + self.fx.dy + self.touch.dy(),
         )
     }
     /// Horizontal offset in cells: rests, then drifts in a short burst.
@@ -714,9 +969,13 @@ impl App {
             closed: self.eyes_closed(),
             blink: self.blinking(),
             yawn: self.yawning(),
-            lean: self.lean(),
+            lean: self.lean() + self.touch.lean(),
             food_x: self.foods().last().map_or(g.cx as f32 + dx, |f| f.0),
             t: self.t,
+            touch: ease(self.touch.touch),
+            touch_at: self.touch.at,
+            ruffle: self.touch.ruffle_k(),
+            ruffle_at: self.touch.ruffle_at,
             tag: None,
         }
     }
@@ -860,5 +1119,164 @@ mod tests {
         assert_eq!(c.msg, Some(Key::Pet.msg()));
         c.press(Key::Play);
         assert_eq!(c.msg, Some(Key::Play.msg()));
+    }
+
+    /// Draw a frame so the hit mask is current; returns a squid cell and a water cell.
+    fn framed(a: &mut App) -> ((u16, u16), (u16, u16)) {
+        let cv = crate::art::render(a, false);
+        a.set_hit(cv.owner.clone());
+        let w = a.w as usize;
+        let sq = cv
+            .owner
+            .iter()
+            .position(|&o| o != crate::art::NONE)
+            .unwrap();
+        // the head row: middle of the widest squid span
+        let row = (a.geo().top + a.geo().mh + 1) as usize;
+        let xs: Vec<usize> = (0..w)
+            .filter(|&x| cv.owner[row * w + x] != crate::art::NONE)
+            .collect();
+        let _ = sq;
+        let mid = xs[xs.len() / 2];
+        ((mid as u16, row as u16), (1, 1))
+    }
+
+    #[test]
+    fn misses_do_nothing() {
+        let mut a = App::new(120, 40, 1);
+        let (_, water) = framed(&mut a);
+        a.pointer(Ptr::Down, water.0, water.1);
+        a.pointer(Ptr::Up, water.0, water.1);
+        a.pointer(Ptr::Scroll, water.0, water.1);
+        a.pointer(Ptr::Down, water.0, water.1);
+        a.pointer(Ptr::Drag, water.0 + 1, water.1);
+        a.pointer(Ptr::Up, water.0 + 1, water.1);
+        assert!(a.msg.is_none() && a.hearts.is_empty() && !a.pet.on);
+        assert_eq!(a.touch.boop, 0.0);
+    }
+
+    #[test]
+    fn click_boops() {
+        let mut a = App::new(120, 40, 1);
+        let (sq, _) = framed(&mut a);
+        a.pointer(Ptr::Down, sq.0, sq.1);
+        assert!(a.msg.is_none());
+        a.pointer(Ptr::Up, sq.0, sq.1);
+        assert_eq!(a.msg, Some("Boop!"));
+        assert_eq!(a.hearts.len(), 1);
+        let y0 = a.offset().1;
+        a.update(0.2);
+        assert!(a.offset().1 > y0 + 1.0);
+        a.update(0.3);
+        assert_eq!(a.touch.dy(), 0.0);
+        assert!(!a.pet.on);
+    }
+
+    #[test]
+    fn drag_strokes_and_eases_back() {
+        let mut a = App::new(120, 40, 1);
+        let (sq, _) = framed(&mut a);
+        a.pointer(Ptr::Down, sq.0, sq.1);
+        for i in 1..=10 {
+            a.pointer(Ptr::Drag, sq.0 + i, sq.1);
+            a.update(0.06);
+        }
+        assert!(a.hearts.len() >= 4, "{}", a.hearts.len());
+        assert_eq!(a.msg, Some("Blub blub \u{2665}"));
+        assert!(a.eyes_closed() && a.blush() > 0.0);
+        assert!(a.touch.touch > 0.5 && a.touch.lean() != 0.0);
+        a.pointer(Ptr::Up, sq.0 + 10, sq.1);
+        let n = a.hearts.len();
+        for _ in 0..20 {
+            a.update(0.06);
+        }
+        assert!(!a.pet.on && a.touch.touch == 0.0);
+        assert!(a.hearts.len() <= n);
+        assert!(a.hearts.is_empty());
+    }
+
+    #[test]
+    fn drag_off_squid_stops_and_entry_starts() {
+        let mut a = App::new(120, 40, 1);
+        let (sq, water) = framed(&mut a);
+        a.pointer(Ptr::Down, water.0, water.1);
+        a.pointer(Ptr::Drag, water.0 + 1, water.1);
+        assert!(a.hearts.is_empty());
+        a.pointer(Ptr::Drag, sq.0, sq.1);
+        assert!(!a.hearts.is_empty() && a.touch.held);
+        a.pointer(Ptr::Drag, water.0, water.1);
+        assert!(!a.touch.held);
+    }
+
+    #[test]
+    fn scroll_ruffles_without_hearts() {
+        let mut a = App::new(120, 40, 1);
+        let (sq, _) = framed(&mut a);
+        a.pointer(Ptr::Scroll, sq.0, sq.1);
+        assert_eq!(a.msg, Some("Hehe~"));
+        assert!(a.hearts.is_empty() && !a.pet.on && a.blush() == 0.0);
+        assert!(a.touch.ruffle > 0.0);
+        for _ in 0..20 {
+            a.update(0.06);
+        }
+        assert_eq!(a.touch.ruffle, 0.0);
+    }
+
+    #[test]
+    fn rapid_boops_are_capped_and_keys_still_work() {
+        let mut a = App::new(120, 40, 1);
+        let (sq, _) = framed(&mut a);
+        for _ in 0..20 {
+            a.pointer(Ptr::Down, sq.0, sq.1);
+            a.pointer(Ptr::Up, sq.0, sq.1);
+        }
+        assert_eq!(a.hearts.len(), PRESS_CAP);
+        assert_eq!(a.msg, Some("Boop!"));
+        a.pointer(Ptr::Down, sq.0, sq.1);
+        a.pointer(Ptr::Drag, sq.0 + 1, sq.1);
+        assert!(a.press(Key::Feed));
+        assert!(a.feed.on);
+    }
+
+    #[test]
+    fn resize_ends_drag_and_clears_hits() {
+        let mut a = App::new(120, 40, 1);
+        let (sq, _) = framed(&mut a);
+        a.pointer(Ptr::Down, sq.0, sq.1);
+        a.pointer(Ptr::Drag, sq.0 + 1, sq.1);
+        a.resize(100, 30);
+        assert!(!a.touch.held);
+        a.pointer(Ptr::Drag, sq.0 + 2, sq.1);
+        assert!(a.drag.is_none());
+        let _ = framed(&mut a);
+    }
+
+    #[test]
+    fn guest_reacts_in_own_color_and_away_ignores() {
+        let mut a = App::new(120, 40, 1);
+        a.enable_social(1);
+        a.on_msg(2, Msg::Arrive(2));
+        for _ in 0..200 {
+            a.on_msg(
+                2,
+                Msg::Hello {
+                    away: true,
+                    accept: true,
+                },
+            );
+            a.update(0.06);
+        }
+        assert_eq!(a.guests.len(), 1);
+        let cv = crate::art::render(&a, false);
+        a.set_hit(cv.owner.clone());
+        let p = cv.owner.iter().position(|&o| o == 0).unwrap();
+        let (c, r) = ((p % 120) as u16, (p / 120) as u16);
+        a.pointer(Ptr::Down, c, r);
+        a.pointer(Ptr::Up, c, r);
+        assert!(a.guests[0].touch.boop > 0.0 && a.touch.boop == 0.0);
+        assert_eq!(a.guests[0].color, 2);
+        a.outbox.clear();
+        a.pointer(Ptr::Scroll, c, r);
+        assert!(a.outbox.is_empty());
     }
 }

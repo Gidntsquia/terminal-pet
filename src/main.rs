@@ -3,9 +3,12 @@ mod art;
 mod link;
 mod social;
 
-use app::{App, ColorChoice, Key, color_list, parse_color, random_preset};
+use app::{App, ColorChoice, Key, Ptr, color_list, parse_color, random_preset};
 use crossterm::cursor::{Hide, Show};
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+    MouseButton, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -35,12 +38,13 @@ fn color(mode: Mode, c: Option<art::Rgb>) -> Color {
 
 fn restore() {
     let _ = disable_raw_mode();
-    let _ = execute!(stdout(), Show, LeaveAlternateScreen);
+    let _ = execute!(stdout(), DisableMouseCapture, Show, LeaveAlternateScreen);
 }
 
 fn main() -> io::Result<()> {
     let mut ascii = false;
     let mut solo = false;
+    let mut mouse = true;
     let mut seed = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
@@ -78,10 +82,11 @@ fn main() -> io::Result<()> {
         match a.as_str() {
             "--ascii" => ascii = true,
             "--solo" => solo = true,
+            "--no-mouse" => mouse = false,
             "--seed" => seed = args.next().and_then(|s| s.parse().ok()).unwrap_or(seed),
             "-h" | "--help" => {
                 println!(
-                    "squid-pet - a giant ASCII squid pet\n\nUSAGE: squid-pet [--ascii] [--solo] [--seed N] [--color NAME]\n\n  --color NAME  body color: {}\n  --solo        don't look for other squid-pets in other terminals\n\nKeys: f feed, p pet, space play, c color, v visit a neighbor (or call your guest/visitor home), q/Esc quit\n\nSquid-pets in other terminals on this machine find each other automatically: they\nvisit (on their own every 20-30 minutes, with a 10 minute pause after a visit; or press v any time), share fish (f), bubble streams and\nink (space). Repeated f/p/space presses stack up. Use --solo to stay on your own.",
+                    "squid-pet - a giant ASCII squid pet\n\nUSAGE: squid-pet [--ascii] [--solo] [--no-mouse] [--seed N] [--color NAME]\n\n  --color NAME  body color: {}\n  --solo        don't look for other squid-pets in other terminals\n  --no-mouse    don't capture the mouse (keeps terminal text selection)\n\nKeys: f feed, p pet, space play, c color, v visit a neighbor (or call your guest/visitor home), q/Esc quit\nMouse: click = boop, drag across the squid = stroke, scroll wheel over it = ruffle the tentacles\n\nSquid-pets in other terminals on this machine find each other automatically: they\nvisit (on their own every 20-30 minutes, with a 10 minute pause after a visit; or press v any time), share fish (f), bubble streams and\nink (space). Repeated f/p/space presses stack up. Use --solo to stay on your own.",
                     color_list()
                 );
                 return Ok(());
@@ -109,6 +114,9 @@ fn main() -> io::Result<()> {
     }));
     enable_raw_mode()?;
     execute!(stdout(), EnterAlternateScreen, Hide)?;
+    if mouse {
+        execute!(stdout(), EnableMouseCapture)?;
+    }
     let res = run(ascii, seed, mode, choice, solo);
     restore();
     res
@@ -119,7 +127,7 @@ fn draw(
     app: &App,
     ascii: bool,
     mode: Mode,
-) -> io::Result<()> {
+) -> io::Result<Vec<u8>> {
     let cv = art::render(app, ascii);
     term.draw(|f| {
         let area = f.area();
@@ -133,7 +141,7 @@ fn draw(
             }
         }
     })?;
-    Ok(())
+    Ok(cv.owner)
 }
 
 fn run(ascii: bool, seed: u64, mode: Mode, choice: ColorChoice, solo: bool) -> io::Result<()> {
@@ -151,7 +159,8 @@ fn run(ascii: bool, seed: u64, mode: Mode, choice: ColorChoice, solo: bool) -> i
     }
     let mut last = Instant::now();
     let mut next = last;
-    draw(&mut term, &app, ascii, mode)?;
+    let o = draw(&mut term, &app, ascii, mode)?;
+    app.set_hit(o);
     while !app.quit {
         let mut force = false;
         let wait = next.saturating_duration_since(Instant::now());
@@ -187,6 +196,21 @@ fn run(ascii: bool, seed: u64, mode: Mode, choice: ColorChoice, solo: bool) -> i
                         }
                         _ => {}
                     },
+                    Event::Mouse(m) => {
+                        let ev = match m.kind {
+                            MouseEventKind::Down(MouseButton::Left) => Some(Ptr::Down),
+                            MouseEventKind::Up(MouseButton::Left) => Some(Ptr::Up),
+                            MouseEventKind::Drag(MouseButton::Left) => Some(Ptr::Drag),
+                            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                                Some(Ptr::Scroll)
+                            }
+                            _ => None,
+                        };
+                        if let Some(ev) = ev {
+                            app.pointer(ev, m.column, m.row);
+                            force = true;
+                        }
+                    }
                     Event::Resize(w, h) => {
                         app.resize(w, h);
                         force = true;
@@ -225,7 +249,8 @@ fn run(ascii: bool, seed: u64, mode: Mode, choice: ColorChoice, solo: bool) -> i
                     }
                 }
             }
-            draw(&mut term, &app, ascii, mode)?;
+            let o = draw(&mut term, &app, ascii, mode)?;
+            app.set_hit(o);
             if now >= next {
                 next = now + FRAME;
             }
