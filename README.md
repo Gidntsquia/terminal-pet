@@ -1,7 +1,7 @@
 # terminal-pet 🦑🐈
 
 <p align="center">
-  <img alt="A red-orange ASCII giant squid filling a terminal window, with hearts floating above it after being petted" src="docs/squid-pet.png">
+  <img alt="A red-orange ASCII giant squid filling a terminal window, with hearts floating above it after being petted" src="docs/squid.png">
   <img alt="A calico ASCII cat sitting on a rug in a cozy room, eyes closed with hearts floating above it after being petted" src="docs/cat-pet.png">
 </p>
 
@@ -18,27 +18,27 @@ Pets in different terminals on the same computer find each other and visit. A ca
 Requires Rust (install it with [rustup](https://rustup.rs)).
 
 ```
-git clone https://github.com/Gidntsquia/squid-pet
-cd squid-pet
-cargo install --path .   # Installs both binaries: terminal-pet and squid-pet
+git clone https://github.com/Gidntsquia/terminal-pet
+cd terminal-pet
+cargo install --path .   # Installs the terminal-pet binary
 terminal-pet --pet cat   # The cat
-squid-pet                # The squid (same as terminal-pet --pet squid)
+terminal-pet            # The squid (same as terminal-pet --pet squid)
 ```
 
 Press `f` to feed, `p` to pet, `space` to play, `c` to change color or breed, `v` to visit another pet, and `q` to quit. Click a pet to boop it, drag across it to stroke it, and scroll over it to ruffle it.
 
-On Linux x86_64 you can skip Rust and download a prebuilt binary from the [releases page](https://github.com/Gidntsquia/squid-pet/releases).
+On Linux x86_64 you can skip Rust and download a prebuilt binary from the [releases page](https://github.com/Gidntsquia/terminal-pet/releases).
 
 Other commands:
 
 ```
 terminal-pet --pet cat --breed siamese   # Also tabby, black, calico, orange, tuxedo, gray, white and more
-squid-pet --color purple                 # Also red, blue, pink, green, gold, ghost, blue-ringed
-squid-pet --ascii                        # Draws without Unicode glyphs
-squid-pet --solo                         # Don't look for other pets
-squid-pet --no-mouse                     # Don't capture the mouse
-squid-pet --seed 42                      # Same random behavior every run
-NO_COLOR=1 squid-pet                     # Monochrome
+terminal-pet --color purple                 # Also red, blue, pink, green, gold, ghost, blue-ringed
+terminal-pet --ascii                        # Draws without Unicode glyphs
+terminal-pet --solo                         # Don't look for other pets
+terminal-pet --no-mouse                     # Don't capture the mouse
+terminal-pet --seed 42                      # Same random behavior every run
+NO_COLOR=1 terminal-pet                     # Monochrome
 ```
 
 ## Features 🔬
@@ -56,15 +56,15 @@ NO_COLOR=1 squid-pet                     # Monochrome
 ## Documentation 📚
 
 More details in the
-[wiki](https://github.com/Gidntsquia/squid-pet/wiki):
+[wiki](https://github.com/Gidntsquia/terminal-pet/wiki):
 
-- [Home](https://github.com/Gidntsquia/squid-pet/wiki/Home) — index of all pages
-- [Squid](https://github.com/Gidntsquia/squid-pet/wiki/Squid) — keys, mouse, colors
-- [Cat](https://github.com/Gidntsquia/squid-pet/wiki/Cat) — keys, mouse, breeds
-- [Visits](https://github.com/Gidntsquia/squid-pet/wiki/Visits) — finding neighbors, games, messages
-- [Controls](https://github.com/Gidntsquia/squid-pet/wiki/Controls) — every key and gesture
-- [Development](https://github.com/Gidntsquia/squid-pet/wiki/Development) — build, tests, code layout
-- [Breed Gallery](https://github.com/Gidntsquia/squid-pet/wiki/Breed-Gallery) — every cat and squid color
+- [Home](https://github.com/Gidntsquia/terminal-pet/wiki/Home) — index of all pages
+- [Squid](https://github.com/Gidntsquia/terminal-pet/wiki/Squid) — keys, mouse, colors
+- [Cat](https://github.com/Gidntsquia/terminal-pet/wiki/Cat) — keys, mouse, breeds
+- [Visits](https://github.com/Gidntsquia/terminal-pet/wiki/Visits) — finding neighbors, games, messages
+- [Controls](https://github.com/Gidntsquia/terminal-pet/wiki/Controls) — every key and gesture
+- [Development](https://github.com/Gidntsquia/terminal-pet/wiki/Development) — build, tests, code layout
+- [Breed Gallery](https://github.com/Gidntsquia/terminal-pet/wiki/Breed-Gallery) — every cat and squid color
 
 ## License 📄
 

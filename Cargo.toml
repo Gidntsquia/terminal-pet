@@ -1,6 +1,6 @@
 [package]
 name = "terminal-pet"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [lib]
@@ -10,10 +10,6 @@ path = "src/lib.rs"
 [[bin]]
 name = "terminal-pet"
 path = "src/main.rs"
-
-[[bin]]
-name = "squid-pet"
-path = "src/bin/squid-pet.rs"
 
 [dependencies]
 crossterm = "0.29.0"

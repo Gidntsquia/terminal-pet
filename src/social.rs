@@ -1,4 +1,4 @@
-//! Visits, messages between squid-pets, the shared-window layout and play moves.
+//! Visits, messages between pets, the shared-window layout and play moves.
 //! Pure state logic: sockets live in `link`, drawing in `art`.
 use crate::app::Kind;
 use crate::app::{App, Behavior, Flyer, Heart, Key, State, ease};

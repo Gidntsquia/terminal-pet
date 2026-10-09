@@ -1,4 +1,4 @@
-//! Local-only datagram link between squid-pets: one Unix socket per process in a
+//! Local-only datagram link between pets: one Unix socket per process in a
 //! private (0700) directory. No network. Any setup problem means "run solo".
 use std::fs;
 use std::io;
@@ -206,7 +206,8 @@ mod tests {
     use super::*;
 
     fn tmpdir(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("squid-pet-test-{name}-{}", std::process::id()));
+        let d =
+            std::env::temp_dir().join(format!("terminal-pet-test-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
         d
     }

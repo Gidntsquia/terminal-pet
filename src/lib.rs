@@ -43,14 +43,9 @@ fn restore() {
     let _ = execute!(stdout(), DisableMouseCapture, Show, LeaveAlternateScreen);
 }
 
-/// Run the pet. `forced` is the pet a bin target is fixed to (`squid-pet`); the
-/// `terminal-pet` bin passes `None` and reads `--pet`.
-pub fn cli(forced: Option<Kind>) -> io::Result<()> {
-    let prog = if forced.is_some() {
-        "squid-pet"
-    } else {
-        "terminal-pet"
-    };
+/// Run the pet, reading `--pet` (squid by default) and the other flags.
+pub fn cli() -> io::Result<()> {
+    let prog = "terminal-pet";
     let fail = |m: String| -> ! {
         eprintln!("{prog}: {m}");
         std::process::exit(2);
@@ -62,7 +57,7 @@ pub fn cli(forced: Option<Kind>) -> io::Result<()> {
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(1);
-    let mut pet = forced;
+    let mut pet: Option<Kind> = None;
     let mut color: Option<String> = None;
     let mut breed: Option<String> = None;
     let mut args = std::env::args().skip(1);
@@ -87,9 +82,6 @@ pub fn cli(forced: Option<Kind>) -> io::Result<()> {
             continue;
         }
         if let Some(v) = value(&mut args, &a, "--pet", "squid, cat".into()) {
-            if forced.is_some() {
-                fail("unknown argument '--pet' (this is the squid-only build; try --help)".into());
-            }
             pet = Some(match v.to_ascii_lowercase().as_str() {
                 "squid" => Kind::Squid,
                 "cat" => Kind::Cat,
@@ -103,7 +95,7 @@ pub fn cli(forced: Option<Kind>) -> io::Result<()> {
             "--no-mouse" => mouse = false,
             "--seed" => seed = args.next().and_then(|s| s.parse().ok()).unwrap_or(seed),
             "-h" | "--help" => {
-                println!("{}", help(prog, forced.is_some()));
+                println!("{}", help(prog));
                 return Ok(());
             }
             other => fail(format!("unknown argument '{other}' (try --help)")),
@@ -335,13 +327,7 @@ fn run(
     Ok(())
 }
 
-fn help(prog: &str, squid_only: bool) -> String {
-    if squid_only {
-        return format!(
-            "squid-pet - a giant ASCII squid pet\n\nUSAGE: squid-pet [--ascii] [--solo] [--no-mouse] [--seed N] [--color NAME]\n\n  --color NAME  body color: {}\n  --solo        don't look for other pets in other terminals\n  --no-mouse    don't capture the mouse (keeps terminal text selection)\n\nKeys: f feed, p pet, space play, c color, v visit a neighbor (or call your guest/visitor home), q/Esc quit\nMouse: click = boop, drag across the squid = stroke, scroll wheel over it = ruffle the tentacles\n\nPets in other terminals on this machine find each other automatically: they\nvisit (on their own every 20-30 minutes, with a 10 minute pause after a visit; or press v any time), share fish (f), bubble streams and\nink (space). Repeated f/p/space presses stack up. Use --solo to stay on your own.",
-            color_list()
-        );
-    }
+fn help(prog: &str) -> String {
     format!(
         "{prog} - a giant ASCII pet for your terminal: a squid or a cat\n\nUSAGE: {prog} [--pet squid|cat] [--ascii] [--solo] [--no-mouse] [--seed N] [--color NAME | --breed NAME]\n\n  --pet KIND    which pet: squid (default) or cat\n  --color NAME  squid color: {}\n  --breed NAME  cat breed: {}\n  --solo        don't look for other pets in other terminals\n  --no-mouse    don't capture the mouse (keeps terminal text selection)\n\nKeys: f feed (squid) / treat (cat), p pet, space play (squid) / laser dot (cat), c color / breed, v visit a neighbor (or call your guest/visitor home), q/Esc quit\nMouse: click = boop, drag across the pet = stroke, scroll wheel over it = ruffle\n\nPets in other terminals on this machine find each other automatically (a cat and a squid can visit each other): they\nvisit (on their own every 20-30 minutes, with a 10 minute pause after a visit; or press v any time) and share treats, fish, motes, bubbles, ink and pounces. Repeated f/p/space presses stack up. Use --solo to stay on your own.",
         color_list(),
