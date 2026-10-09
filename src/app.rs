@@ -162,6 +162,8 @@ pub struct Touch {
     pub dir: f32,
     /// 0..1: how far the cat tail has swung to the far side (eased).
     pub flip: f32,
+    /// Side the tail is heading to (0 or 1); kept after release.
+    pub flip_want: f32,
     /// Seconds of ruffle left, and where.
     pub ruffle: f32,
     pub ruffle_at: (f32, f32),
@@ -196,10 +198,11 @@ impl Touch {
         self.phase += dt * 16.0;
         // The tail follows the pointer side while held and stays put on release.
         if self.held {
-            let want = if self.dir < 0.0 { 1.0 } else { 0.0 };
-            let step = dt / TAIL_SWING;
-            self.flip += (want - self.flip).clamp(-step, step);
+            self.flip_want = if self.dir < 0.0 { 1.0 } else { 0.0 };
         }
+        // Keep swinging after release so the tail always finishes on one side.
+        let step = dt / TAIL_SWING;
+        self.flip += (self.flip_want - self.flip).clamp(-step, step);
     }
     /// Cat tail side in -1..1 (1 = rest side); sweeps continuously.
     pub fn tail_side(&self) -> f32 {

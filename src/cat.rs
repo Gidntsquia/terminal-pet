@@ -855,6 +855,31 @@ mod tests {
             a.update(0.0625);
         }
         assert!((tip(&a) - before).abs() < 0.01, "tail moved after release");
+
+        // drag left, release mid-sweep: the tail finishes fully on the left
+        a.pointer(Ptr::Down, r, row);
+        for _ in 0..10 {
+            a.pointer(Ptr::Drag, r, row);
+            a.update(0.0625);
+        }
+        for _ in 0..3 {
+            a.pointer(Ptr::Drag, l, row);
+            a.update(0.0625);
+        }
+        let mid = tip(&a);
+        assert!(mid.abs() < 0.9 * reach, "not mid-sweep: {mid}");
+        a.pointer(Ptr::Up, l, row);
+        for _ in 0..40 {
+            a.update(0.0625);
+        }
+        assert!(tip(&a) < -0.95 * reach, "stuck: {}", tip(&a));
+        // then drag right: it reaches the right
+        a.pointer(Ptr::Down, r, row);
+        for _ in 0..15 {
+            a.pointer(Ptr::Drag, r, row);
+            a.update(0.0625);
+        }
+        assert!(tip(&a) > 0.95 * reach, "never crossed: {}", tip(&a));
     }
 
     #[test]
