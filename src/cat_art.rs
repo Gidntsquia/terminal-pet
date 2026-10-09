@@ -78,10 +78,8 @@ fn look_of(body: &Body) -> Look {
     } else {
         from
     };
-    let tone = |c: Rgb| {
-        let c = lerp(c, WHITE, 0.4 * body.bright);
-        lerp(c, (0x30, 0x30, 0x38), 0.8 * body.dark)
-    };
+    // cats do not glow: `body.bright` (the squid light pulse) is ignored
+    let tone = |c: Rgb| lerp(c, (0x30, 0x30, 0x38), 0.8 * body.dark);
     let mix = |a: Rgb, b: Rgb| tone(lerp(a, b, k));
     Look {
         sb,

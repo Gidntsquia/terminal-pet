@@ -570,6 +570,21 @@ mod tests {
     }
 
     #[test]
+    fn cats_do_not_glow() {
+        let mut a = cat(120, 40, 1);
+        let b0 = a.cat_host_body();
+        let mut b1 = b0.clone();
+        b1.bright = 1.0;
+        let draw = |b: &crate::art::Body| {
+            let mut cv = crate::art::Canvas::new(120, 40, false);
+            crate::cat_art::draw_cat(&mut cv, b, false);
+            cv.cells.iter().map(|c| c.fg).collect::<Vec<_>>()
+        };
+        assert_eq!(draw(&b0), draw(&b1));
+        let _ = &mut a;
+    }
+
+    #[test]
     fn breeds_in_spec_order_and_cycle() {
         let names: Vec<_> = BREEDS.iter().map(|b| b.name).collect();
         assert_eq!(
