@@ -194,13 +194,12 @@ impl Touch {
         let d = if self.held { dt / 0.25 } else { -dt };
         self.touch = (self.touch + d).clamp(0.0, 1.0);
         self.phase += dt * 16.0;
-        let want = if self.held && self.dir < 0.0 {
-            1.0
-        } else {
-            0.0
-        };
-        let step = dt / TAIL_SWING;
-        self.flip += (want - self.flip).clamp(-step, step);
+        // The tail follows the pointer side while held and stays put on release.
+        if self.held {
+            let want = if self.dir < 0.0 { 1.0 } else { 0.0 };
+            let step = dt / TAIL_SWING;
+            self.flip += (want - self.flip).clamp(-step, step);
+        }
     }
     /// Cat tail side in -1..1 (1 = rest side); sweeps continuously.
     pub fn tail_side(&self) -> f32 {

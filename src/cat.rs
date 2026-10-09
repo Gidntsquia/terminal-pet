@@ -848,6 +848,13 @@ mod tests {
             .iter()
             .fold((f32::MAX, f32::MIN), |(a, b), &x| (a.min(x), b.max(x)));
         assert!(lo < -0.5 * reach && hi > 0.5 * reach, "{seen:?}");
+        // after release the tail stays on the side the drag left it
+        let before = tip(&a);
+        a.pointer(Ptr::Up, r, row);
+        for _ in 0..40 {
+            a.update(0.0625);
+        }
+        assert!((tip(&a) - before).abs() < 0.01, "tail moved after release");
     }
 
     #[test]
