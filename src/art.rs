@@ -222,18 +222,27 @@ pub fn geo(w: u16, h: u16) -> Geo {
     geo_s(w, h, 1.0)
 }
 
-/// Layout at a size factor (1.0 = solo size; smaller when guests share the window).
-/// Eye half-width and distance of each eye's centre from the head axis. Each eye is at most
-/// about a quarter of the head width, and both lie inside the (narrowing) head.
-pub fn eye_box(g: &Geo, hwh: f32) -> (i32, i32) {
+/// The squid's eyes sit on the head edge, sized from head height. In a tall, narrow pane the
+/// head is narrow but tall, so those eyes become huge for the head (over a third of its width,
+/// up to touching each other). Only then shrink them, keeping their shape and their place on
+/// the head edge, to the size they have at normal pane sizes relative to the head.
+/// Returns (rx, ry) unchanged at every size where the eyes already fit.
+pub fn narrow_eye_clamp(hwh: f32, rx: i32, ry: i32) -> (i32, i32) {
     let head_w = 2.0 * hwh + 1.0;
-    let by_height = if g.hh <= 4 { 2 } else { g.hh - 1 };
-    let by_width = ((head_w / 4.0 - 1.0) / 2.0).floor() as i32;
-    let rx = by_height.min(by_width).max(1);
-    let inset = ((hwh * 0.55).round() as i32).max(rx + 1);
-    (rx, inset)
+    let max_w = EYE_HEAD_MAX * head_w;
+    if (2 * rx + 1) as f32 <= max_w {
+        return (rx, ry);
+    }
+    let rx2 = (((max_w - 1.0) / 2.0).floor() as i32).clamp(1, rx);
+    let ry2 = ((ry * rx2) as f32 / rx as f32).round() as i32;
+    (rx2, ry2.clamp(1, ry))
 }
 
+/// Largest eye width / head width at which the old eye size is kept (normal panes are
+/// 0.19-0.32; 40x40 is 0.38 but already at the smallest round eye).
+const EYE_HEAD_MAX: f32 = 0.36;
+
+/// Layout at a size factor (1.0 = solo size; smaller when guests share the window).
 pub fn geo_s(w: u16, h: u16, scale: f32) -> Geo {
     let total = ((h as f32 * 0.8 * scale).round() as i32).max(8);
     let mh = (total as f32 * 0.42).round() as i32;
@@ -633,11 +642,17 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
     // eyes
     // slit eyes on the head edge: round ring, dark centre, shine; scaled by head height
     let ry = (((g.hh - 1) as f32 / 3.0).round() as i32).max(1);
-    let (rx, inset) = eye_box(&g, hwh);
+    let rx = if g.hh <= 4 { 2 } else { g.hh - 1 };
+    let (rx, ry) = narrow_eye_clamp(hwh, rx, ry);
     let ring_at = 0.7;
     let ey = top + g.mh + g.hh / 2;
     let look = body.look;
     for s in [-1i32, 1] {
+        let inset = if ry == 1 {
+            (hwh * 0.95).round() as i32
+        } else {
+            (hwh - rx as f32 * 0.4).round() as i32
+        };
         let ex = cx + wob(ey).round() as i32 + s * inset;
         if body.closed {
             for x in -rx..=rx {
@@ -883,25 +898,53 @@ mod tests {
 #[cfg(test)]
 mod eye_tests {
     use super::*;
+    /// (rx, ry) of the pre-9cec593 eyes.
+    fn old_eyes(g: &Geo) -> (i32, i32) {
+        let ry = (((g.hh - 1) as f32 / 3.0).round() as i32).max(1);
+        let rx = if g.hh <= 4 { 2 } else { g.hh - 1 };
+        (rx, ry)
+    }
+    fn inset(hwh: f32, rx: i32, ry: i32) -> i32 {
+        if ry == 1 {
+            (hwh * 0.95).round() as i32
+        } else {
+            (hwh - rx as f32 * 0.4).round() as i32
+        }
+    }
     #[test]
-    fn eyes_fit_the_head_at_all_sizes() {
-        for (w, h) in [
-            (20, 10),
-            (40, 40),
-            (80, 24),
-            (120, 40),
-            (200, 50),
-            (300, 80),
+    fn clamp_leaves_normal_sizes_alone() {
+        // (w, h, rx, ry, inset) of the pre-9cec593 eyes
+        for (w, h, rx, ry, ins) in [
+            (40, 40, 2, 1, 6),
+            (80, 24, 2, 1, 8),
+            (120, 40, 2, 1, 13),
+            (200, 50, 5, 2, 15),
+            (300, 80, 8, 3, 24),
         ] {
             let g = geo_s(w, h, 1.0);
-            let (rx, inset) = eye_box(&g, g.hwh);
-            let n = (g.hwh * 0.875).round() as i32; // head half-width on the eye row (it narrows)
+            assert_eq!(old_eyes(&g), (rx, ry), "{w}x{h} old formula");
+            let (rx2, ry2) = narrow_eye_clamp(g.hwh, rx, ry);
+            assert_eq!((rx2, ry2), (rx, ry), "{w}x{h} clamp must not fire");
+            assert_eq!(inset(g.hwh, rx2, ry2), ins, "{w}x{h} inset");
+        }
+    }
+    #[test]
+    fn clamp_fits_two_eyes_in_a_narrow_head() {
+        for (w, h) in [(40, 50), (40, 60), (40, 70), (45, 80), (40, 100), (60, 60)] {
+            let g = geo_s(w, h, 1.0);
+            let (rx, ry) = old_eyes(&g);
+            let (rx2, ry2) = narrow_eye_clamp(g.hwh, rx, ry);
+            assert!(rx2 < rx, "{w}x{h} clamp fires");
             assert!(
-                rx == 1 || 2 * rx < ((2.0 * g.hwh + 1.0) / 4.0) as i32 + 1,
-                "{w}x{h} eye too wide"
+                (2 * rx2 + 1) as f32 <= 0.36 * (2.0 * g.hwh + 1.0),
+                "{w}x{h} eye too big"
             );
-            assert!(inset + rx <= n, "{w}x{h} eye outside head");
-            assert!(inset > rx, "{w}x{h} eyes overlap");
+            let i = inset(g.hwh, rx2, ry2);
+            assert!(i - rx2 >= 1, "{w}x{h} eyes touch");
+            // eye centre on the head (head half-width on the eye row, it narrows)
+            let n = (g.hwh * (1.0 - 0.25 * (g.hh / 2) as f32 / g.hh as f32)).round() as i32;
+            assert!(i <= n + 1, "{w}x{h} eye off the head");
+            assert!(rx2 >= 1 && (1..=ry).contains(&ry2));
         }
     }
 }
@@ -927,7 +970,7 @@ mod golden {
                 }
             }
         }
-        assert_eq!(h, 633903244474675514);
+        assert_eq!(h, 5248091251924366442);
     }
 }
 
