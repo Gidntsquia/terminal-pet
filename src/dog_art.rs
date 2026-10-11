@@ -223,10 +223,10 @@ impl<'a> Rig<'a> {
         let p = &body.dpose;
         let m = g.maxw * br.size * 1.6;
         let ll = (0.15 * m * br.leg).max(1.0);
-        let rv = 0.14 * m;
+        let rv = 0.13 * m;
         let vb = ll + rv;
-        let hru = 0.18 * m;
-        let hrv = 0.1 * m;
+        let hru = 0.17 * m;
+        let hrv = 0.15 * m;
         let hd = p.head_down.max(0.5 * p.crouch);
         let hv0 = vb + rv * 0.75;
         let mut hv = hv0 - hd * (hv0 - 1.4 - hrv * 0.5) + p.look_up * 0.12 * m - p.tilt.abs() * 0.8;
@@ -234,8 +234,8 @@ impl<'a> Rig<'a> {
         let mut oy = (feet - 1) as f32 + body.dy;
         let flip = p.roll > 0.5;
         if flip {
-            hv = 2.0 * vb - hv - ll;
-            hu += 0.0;
+            // lying on its back: the body rests on the grass (`fill` mirrors v)
+            oy += (ll - 2.0).max(0.0);
         } else {
             oy += p.crouch;
         }
@@ -252,7 +252,7 @@ impl<'a> Rig<'a> {
             m,
             ll,
             rv,
-            ru: 0.46 * m,
+            ru: 0.42 * m,
             vb,
             hu,
             hv,
@@ -346,7 +346,7 @@ impl<'a> Rig<'a> {
     }
 
     fn mouth(&self) -> (f32, f32) {
-        let tip = self.hu + self.hru * 0.85 + 0.09 * self.m;
+        let tip = self.hu + self.hru * 0.85 + 0.11 * self.m;
         (tip, self.hv - 0.4)
     }
 }
@@ -361,10 +361,20 @@ fn shade(c: Rgb, k: f32) -> Rgb {
 
 /// Fur at a body point: glyph and color for this breed's markings.
 fn coat(r: &Rig, u: f32, v: f32, x: i32, y: i32) -> (char, Rgb) {
+    let (ch, c) = coat_flat(r, u, v, x, y);
+    // same fur speckle as the cat: every seventh cell a darker, lighter-weight glyph
+    if ch == '\u{2588}' && (x + 3 * y).rem_euclid(7) == 0 && r.br.pat != Pat::Poodle {
+        ('\u{2593}', shade(c, -0.6))
+    } else {
+        (ch, c)
+    }
+}
+
+fn coat_flat(r: &Rig, u: f32, v: f32, x: i32, y: i32) -> (char, Rgb) {
     let b = r.br;
     let rel = ((v - r.vb) / r.rv).clamp(-1.0, 1.0);
     let uu = u / r.m;
-    let base = shade(b.coat, rel * 0.8);
+    let base = shade(b.coat, rel * 0.3);
     match b.pat {
         Pat::Plain => ('\u{2588}', base),
         Pat::Husky => {
@@ -423,7 +433,14 @@ fn draw_leg(r: &Rig, cv: &mut Canvas, p: &crate::dog::DogPose, u0: f32, ph: f32,
     } else {
         0.0
     };
-    let hw = (0.035 * r.m).max(1.0);
+    // on its back the legs are bent and paw at the air
+    let (swing, lift) = if r.flip {
+        let k = (r.t * 9.0 + ph).sin();
+        (k * 0.04 * r.m, r.ll * 0.45 + (k * 0.5 + 0.5) * r.ll * 0.2)
+    } else {
+        (swing, lift)
+    };
+    let hw = (0.04 * r.m).max(1.5);
     let top = r.vb;
     let col = if far { shade(b.coat, -0.6) } else { b.coat };
     r.fill(
@@ -450,7 +467,7 @@ fn draw_leg(r: &Rig, cv: &mut Canvas, p: &crate::dog::DogPose, u0: f32, ph: f32,
 fn draw_tail(r: &Rig, cv: &mut Canvas, p: &crate::dog::DogPose) {
     let b = r.br;
     let m = r.m;
-    let (bu, bv) = (-0.46 * m, r.vb + r.rv * 0.5);
+    let (bu, bv) = (-0.42 * m, r.vb + r.rv * 0.5);
     let wag = (p.wag_ph).sin() * p.wag.clamp(0.0, 1.0) * 0.55;
     let col = b.coat;
     let stampc = |cv: &mut Canvas, u: f32, v: f32, ch: char, c: Rgb| {
@@ -468,7 +485,7 @@ fn draw_tail(r: &Rig, cv: &mut Canvas, p: &crate::dog::DogPose) {
         }
     };
     match b.tail {
-        Tail::Straight => line(cv, 0.6 + wag, 0.30 * m, false, '\u{2588}', col),
+        Tail::Straight => line(cv, 0.6 + wag, 0.30 * m, true, '\u{2588}', col),
         Tail::Plume => {
             line(cv, 0.7 + wag, 0.32 * m, true, '\u{2588}', col);
             line(cv, 0.45 + wag, 0.3 * m, false, '\u{2593}', shade(col, -0.4));
@@ -513,11 +530,15 @@ fn draw_head(r: &Rig, cv: &mut Canvas, body: &Body, neck: bool) {
     let (hu, hv) = (r.hu, r.hv);
     let mu = hu + r.hru * 0.85;
     let mv = hv - 0.25 * r.hrv;
-    let mru = 0.09 * m;
-    let mrv = (0.055 * m).max(0.9);
+    let mru = 0.11 * m;
+    let mrv = (0.06 * m).max(1.0);
     // far ear (behind the head)
     let ear = |cv: &mut Canvas, far: bool| {
-        let c = if far { shade(b.dark, -0.5) } else { b.dark };
+        let c = if far {
+            shade(b.dark, -1.5)
+        } else {
+            shade(b.dark, -0.8)
+        };
         if b.ears_up {
             let base = hu - r.hru * (if far { 0.15 } else { 0.55 });
             let h = (0.1 * m).max(2.0);
@@ -556,13 +577,13 @@ fn draw_head(r: &Rig, cv: &mut Canvas, body: &Body, neck: bool) {
     for k in 0..=(if neck { 6 } else { -1 }) {
         let a = k as f32 / 6.0;
         let (nu, nv) = (
-            0.32 * m + (hu - 0.32 * m) * a,
+            0.3 * m + (hu - 0.3 * m) * a,
             r.vb + r.rv * 0.5 + (hv - r.vb - r.rv * 0.5) * a,
         );
         r.ell(
             cv,
             (nu, nv),
-            (0.09 * m, (0.05 * m).max(1.0)),
+            (0.1 * m, (0.06 * m).max(1.2)),
             &|u, v, x, y| coat(r, u, v.min(r.vb + r.rv), x, y),
         );
     }
@@ -649,25 +670,25 @@ pub fn draw_dog(cv: &mut Canvas, body: &Body) {
         return;
     }
     // hind and near legs, tail, body, front legs, head
-    draw_leg(&r, cv, p, -0.36 * m, 0.0, true);
-    draw_leg(&r, cv, p, 0.24 * m, std::f32::consts::PI, true);
+    draw_leg(&r, cv, p, -0.32 * m, 0.0, true);
+    draw_leg(&r, cv, p, 0.26 * m, std::f32::consts::PI, true);
     draw_tail(&r, cv, p);
     let belly = if r.flip { b_light(&r) } else { None };
-    r.ell(cv, (-0.04 * m, r.vb), (r.ru, r.rv), &|u, v, x, y| {
+    r.ell(cv, (-0.02 * m, r.vb), (r.ru, r.rv), &|u, v, x, y| {
         if let Some(c) = belly {
             ('\u{2588}', c)
         } else {
             coat(&r, u, v, x, y)
         }
     });
-    draw_leg(&r, cv, p, -0.28 * m, std::f32::consts::PI, false);
+    draw_leg(&r, cv, p, -0.25 * m, std::f32::consts::PI, false);
     // front legs: dig alternates them backwards
     let dig = if p.dig > 0.0 {
         (p.fast_ph).sin() * p.dig
     } else {
         0.0
     };
-    draw_leg(&r, cv, p, 0.33 * m - 0.06 * m * dig, 0.0, false);
+    draw_leg(&r, cv, p, 0.32 * m - 0.06 * m * dig, 0.0, false);
     // hind leg raised to scratch the ear
     if p.scratch > 0.0 {
         let k = (p.fast_ph * 0.5).sin() * 0.5 + 0.5;
@@ -793,9 +814,34 @@ fn draw_inside(cv: &mut Canvas, body: &Body, r0: &Rig) {
     }
 }
 
+/// Soft darker rim (`▒`) on cells that border empty space, like the cat's gray edge.
+fn edge_pass(sc: &mut Canvas) {
+    let (w, h) = (sc.w as i32, sc.h as i32);
+    let src: Vec<Cell> = sc.cells.clone();
+    let at = |x: i32, y: i32| -> bool {
+        x >= 0 && y >= 0 && x < w && y < h && src[(y * w + x) as usize].fg.is_some()
+    };
+    for y in 0..h {
+        for x in 0..w {
+            let c = src[(y * w + x) as usize];
+            let Some(col) = c.fg else { continue };
+            if c.ch != '\u{2588}' && c.ch != '\u{2593}' {
+                continue;
+            }
+            if !(at(x - 1, y) && at(x + 1, y) && at(x, y - 1) && at(x, y + 1)) {
+                sc.cells[(y * w + x) as usize] = Cell {
+                    ch: '\u{2592}',
+                    fg: Some(lerp(col, (0, 0, 0), 0.28)),
+                };
+            }
+        }
+    }
+}
+
 pub fn draw_dog_into(cv: &mut Canvas, body: &Body, _mono: bool, id: u8, w: u16, h: u16) {
     let mut sc = Canvas::new(w, h, cv.ascii);
     draw_dog(&mut sc, body);
+    edge_pass(&mut sc);
     let p = &body.dpose;
     let (x0, hw, _, _) = house(w, h);
     let hide = p.nap > 0.0 && !p.inside;
