@@ -238,6 +238,26 @@ pub struct DogPose {
     pub sniff: f32,
     /// 0..1 how far into the doghouse the dog has gone.
     pub nap: f32,
+    /// Held on its feet (roll-over, pet) even when nothing else says so.
+    pub up: bool,
+}
+
+impl DogPose {
+    /// The default idle pose is sitting, facing the viewer; the dog gets up (side view)
+    /// to walk, sniff, dig, fetch, spin or roll.
+    pub fn seated(&self) -> bool {
+        !(self.walking
+            || self.running
+            || self.up
+            || self.inside
+            || self.head_down > 0.05
+            || self.dig > 0.0
+            || self.crouch > 0.0
+            || self.roll > 0.0
+            || self.nap > 0.0
+            || self.carry == 2
+            || self.spin.abs() < 0.999)
+    }
 }
 
 impl Default for DogPose {
@@ -265,6 +285,7 @@ impl Default for DogPose {
             crouch: 0.0,
             sniff: 0.0,
             nap: 0.0,
+            up: false,
         }
     }
 }
@@ -657,6 +678,7 @@ impl App {
         }
         p.walking &= !p.running;
         p.nap = self.dog.nap_k;
+        p.up = self.pet.on;
         p
     }
 

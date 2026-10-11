@@ -223,6 +223,17 @@ pub fn geo(w: u16, h: u16) -> Geo {
 }
 
 /// Layout at a size factor (1.0 = solo size; smaller when guests share the window).
+/// Eye half-width and distance of each eye's centre from the head axis. Each eye is at most
+/// about a quarter of the head width, and both lie inside the (narrowing) head.
+pub fn eye_box(g: &Geo, hwh: f32) -> (i32, i32) {
+    let head_w = 2.0 * hwh + 1.0;
+    let by_height = if g.hh <= 4 { 2 } else { g.hh - 1 };
+    let by_width = ((head_w / 4.0 - 1.0) / 2.0).floor() as i32;
+    let rx = by_height.min(by_width).max(1);
+    let inset = ((hwh * 0.55).round() as i32).max(rx + 1);
+    (rx, inset)
+}
+
 pub fn geo_s(w: u16, h: u16, scale: f32) -> Geo {
     let total = ((h as f32 * 0.8 * scale).round() as i32).max(8);
     let mh = (total as f32 * 0.42).round() as i32;
@@ -622,16 +633,11 @@ fn draw_squid_upright(cv: &mut Canvas, body: &Body, mono: bool) {
     // eyes
     // slit eyes on the head edge: round ring, dark centre, shine; scaled by head height
     let ry = (((g.hh - 1) as f32 / 3.0).round() as i32).max(1);
-    let rx = if g.hh <= 4 { 2 } else { g.hh - 1 };
+    let (rx, inset) = eye_box(&g, hwh);
     let ring_at = 0.7;
     let ey = top + g.mh + g.hh / 2;
     let look = body.look;
     for s in [-1i32, 1] {
-        let inset = if ry == 1 {
-            (hwh * 0.95).round() as i32
-        } else {
-            (hwh - rx as f32 * 0.4).round() as i32
-        };
         let ex = cx + wob(ey).round() as i32 + s * inset;
         if body.closed {
             for x in -rx..=rx {
@@ -875,6 +881,32 @@ mod tests {
 }
 
 #[cfg(test)]
+mod eye_tests {
+    use super::*;
+    #[test]
+    fn eyes_fit_the_head_at_all_sizes() {
+        for (w, h) in [
+            (20, 10),
+            (40, 40),
+            (80, 24),
+            (120, 40),
+            (200, 50),
+            (300, 80),
+        ] {
+            let g = geo_s(w, h, 1.0);
+            let (rx, inset) = eye_box(&g, g.hwh);
+            let n = (g.hwh * 0.875).round() as i32; // head half-width on the eye row (it narrows)
+            assert!(
+                rx == 1 || 2 * rx < ((2.0 * g.hwh + 1.0) / 4.0) as i32 + 1,
+                "{w}x{h} eye too wide"
+            );
+            assert!(inset + rx <= n, "{w}x{h} eye outside head");
+            assert!(inset > rx, "{w}x{h} eyes overlap");
+        }
+    }
+}
+
+#[cfg(test)]
 mod golden {
     use super::*;
     /// Solo with a seed must render exactly as the build before visits existed.
@@ -895,7 +927,7 @@ mod golden {
                 }
             }
         }
-        assert_eq!(h, 5248091251924366442);
+        assert_eq!(h, 633903244474675514);
     }
 }
 
