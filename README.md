@@ -1,11 +1,12 @@
-# terminal-pet 🦑🐈
+# terminal-pet 🦑🐈🐕
 
 <p align="center">
   <img alt="A red-orange ASCII giant squid filling a terminal window, with hearts floating above it after being petted" src="docs/squid.png">
   <img alt="A calico ASCII cat sitting on a rug in a cozy room, eyes closed with hearts floating above it after being petted" src="docs/cat-pet.png">
+  <img alt="A golden retriever ASCII dog in a backyard with a doghouse, a tree and a fence" src="docs/dog-pet.png">
 </p>
 
-Two full-screen, colored ASCII pets for your terminal: a giant squid and a cat with 12 breeds in a cozy room. You can feed them, pet them, play with them, and boop them with the mouse. It's written in Rust with [ratatui](https://ratatui.rs), and the default squid color is based on photos of real giant squid. Nothing is saved between runs.
+Three full-screen, colored ASCII pets for your terminal: a giant squid, a cat with 12 breeds in a cozy room, and a dog with 8 breeds in a backyard (`--pet dog`). You can feed them, pet them, play with them, and boop them with the mouse. It's written in Rust with [ratatui](https://ratatui.rs), and the default squid color is based on photos of real giant squid. Nothing is saved between runs.
 
 Pets in different terminals on the same computer find each other and visit. A cat that plays sends a squid a toy mouse, and a squid that plays can ink the cat.
 
@@ -47,9 +48,10 @@ NO_COLOR=1 terminal-pet                     # Monochrome
 - Tentacles sway, the body bobs, the eyes blink, and bubbles drift up past seaweed and waves.
 - Feeding drops a fish for the squid to grab, and petting sends hearts floating up.
 - The cat bats treats, chases a laser dot, purrs when stroked, and swings its tail as your mouse crosses it.
+- The dog catches biscuits, fetches a ball, digs, naps in its doghouse and barks. Pick one of its 8 breeds with `--pet dog --breed <name>`.
 - Cats come in 12 breeds and squid in eight colors. Press `c` to change while it runs.
 - Pets visit each other every 20-30 minutes, or when you press `v`, and play chase, high-five and tag.
-- A squid that gets a toy mouse from a cat jumps and puffs up. A cat that gets inked sneezes it off.
+- A squid that gets a toy mouse from a cat jumps and puffs up. A cat that gets inked sneezes it off. A dog's bark makes a cat arch and a squid jet away.
 - Feed, pet and play stack: pressing them together or repeatedly layers the reactions.
 - Uses truecolor when the terminal supports it and falls back to 256 colors.
 
@@ -61,6 +63,8 @@ More details in the
 - [Home](https://github.com/Gidntsquia/terminal-pet/wiki/Home) — index of all pages
 - [Squid](https://github.com/Gidntsquia/terminal-pet/wiki/Squid) — keys, mouse, colors
 - [Cat](https://github.com/Gidntsquia/terminal-pet/wiki/Cat) — keys, mouse, breeds
+- [Dog](https://github.com/Gidntsquia/terminal-pet/wiki/Dog) — keys, mouse, breeds
+- [Adding a pet](https://github.com/Gidntsquia/terminal-pet/wiki/Adding-a-pet) — checklist for new pets
 - [Visits](https://github.com/Gidntsquia/terminal-pet/wiki/Visits) — finding neighbors, games, messages
 - [Controls](https://github.com/Gidntsquia/terminal-pet/wiki/Controls) — every key and gesture
 - [Development](https://github.com/Gidntsquia/terminal-pet/wiki/Development) — build, tests, code layout
