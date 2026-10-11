@@ -238,8 +238,8 @@ impl<'a> Rig<'a> {
         let ll = (0.15 * m * br.leg * (0.35 + 0.65 * tum)).max(1.0);
         let rv = 0.13 * m * (0.6 + 0.4 * tum);
         let vb = ll + rv;
-        let hru = 0.17 * m;
-        let hrv = 0.15 * m;
+        let hru = 0.22 * m;
+        let hrv = 0.17 * m;
         let hd = p.head_down.max(0.5 * p.crouch);
         let hv0 = vb + rv * 0.75;
         let hv = hv0 - hd * (hv0 - 1.4 - hrv * 0.5) + p.look_up * 0.12 * m - p.tilt.abs() * 0.8;
@@ -557,8 +557,8 @@ fn draw_head(r: &Rig, cv: &mut Canvas, body: &Body, neck: bool) {
     let (hu, hv) = (r.hu, r.hv);
     let mu = hu + r.hru * 0.85;
     let mv = hv - 0.25 * r.hrv;
-    let mru = 0.11 * m;
-    let mrv = (0.06 * m).max(1.0);
+    let mru = 0.12 * m;
+    let mrv = (0.07 * m).max(1.0);
     // far ear (behind the head)
     let ear = |cv: &mut Canvas, far: bool| {
         let c = if far {
@@ -660,15 +660,35 @@ fn draw_head(r: &Rig, cv: &mut Canvas, body: &Body, neck: bool) {
             r.stamp(cv, tu + 0.5, tv - 1.0, '~', TONGUE);
         }
     }
-    // nose and eye
-    r.stamp(cv, mu + mru * 0.9, mv + mrv * 0.5, '\u{25cf}', b.nose);
-    let (eu, ev) = (hu + 0.22 * r.hru, hv + 0.2 * r.hrv);
+    // nose, a big shiny eye and a rosy cheek, like the seated face
+    r.stamp(cv, mu + mru * 0.9, mv + mrv * 0.5, '\u{2588}', b.nose);
+    r.stamp(cv, mu + mru * 0.9 - 1.0, mv + mrv * 0.5, '\u{2588}', b.nose);
+    let (eu, ev) = (hu + 0.3 * r.hru, hv + 0.18 * r.hrv);
+    let dark = (0x18, 0x12, 0x14);
     if body.closed || body.blink {
-        r.stamp(cv, eu, ev, '-', (0x20, 0x18, 0x18));
-        r.stamp(cv, eu + 1.0, ev, '-', (0x20, 0x18, 0x18));
+        r.stamp(cv, eu - 0.5, ev, '\u{2580}', dark);
+        r.stamp(cv, eu + 0.5, ev, '\u{2580}', dark);
     } else {
-        r.stamp(cv, eu, ev, '\u{25cf}', b.eye);
+        let iris = if b.eye.0 as u32 + b.eye.1 as u32 + b.eye.2 as u32 > 200 {
+            b.eye
+        } else {
+            dark
+        };
+        r.ell(
+            cv,
+            (eu, ev),
+            ((0.1 * r.hru).max(1.3), (0.17 * r.hrv).max(1.3)),
+            &|_, _, _, _| ('\u{2588}', iris),
+        );
+        r.stamp(cv, eu - 0.5, ev + 0.9, '\u{25cf}', (255, 255, 255));
     }
+    r.stamp(
+        cv,
+        hu - 0.1 * r.hru,
+        hv - 0.4 * r.hrv,
+        '\u{2592}',
+        (0xF0, 0x90, 0xA0),
+    );
     if b.pat == Pat::Dalmatian {
         r.stamp(cv, hu - 0.4 * r.hru, hv + 0.3, '\u{25cf}', b.dark);
     }
