@@ -243,6 +243,8 @@ pub struct DogState {
     /// Biscuits alternate between catch-in-the-air and landing on the grass.
     pub toss_flip: bool,
     pub next_wag: f32,
+    /// Columns the standing dog is pushed right so it never overlaps the doghouse.
+    pub clear_dx: f32,
 }
 
 /// Everything about the dog's pose that is not already in `Body`.
@@ -514,7 +516,7 @@ impl App {
             self.dog.warm = 9.0;
         }
         // facing: follow the direction of travel, or the biscuit
-        let x = self.geo().cx as f32 + self.offset().0;
+        let x = self.geo().cx as f32 + self.offset().0 - self.dog.clear_dx;
         if (x - self.dog.prev_x).abs() > 0.03 {
             self.dog.face = (x - self.dog.prev_x).signum();
         }
@@ -592,6 +594,66 @@ impl App {
             + self.dog_play_dx()
             + self.dog_chase_dx()
             + self.dog_nap_dx()
+            + self.dog.clear_dx
+    }
+
+    /// How many columns the dog drawn as `body` (without `clear_dx`) reaches over the doghouse.
+    fn house_overlap(&self, body: &Body) -> f32 {
+        let clear = crate::dog_art::house_right(self.w, self.h) + 2;
+        // probe further right when the dog would hang off the left edge of the pane
+        for k in 0..4 {
+            let shift = k as f32 * self.w as f32 * 0.5;
+            let mut b = body.clone();
+            b.dx += shift - self.dog.clear_dx;
+            let mut cv = crate::art::Canvas::new(self.w, self.h, false);
+            crate::dog_art::draw_dog(&mut cv, &b);
+            let left = (0..cv.w).find(|&x| (0..cv.h).any(|y| cv.cells[y * cv.w + x].fg.is_some()));
+            match left {
+                Some(0) => continue,
+                Some(x) => return (clear as f32 - (x as f32 - shift)).max(0.0),
+                None => return 0.0,
+            }
+        }
+        0.0
+    }
+
+    /// Columns a ball at play offset `ball_dx` must move right so the dog fetching it
+    /// (running there, then nose down at it) stays clear of the doghouse.
+    fn ball_reach_need(&self, ball_dx: f32, side: f32) -> f32 {
+        let mut b = self.dog_host_body();
+        b.dx = self.dog_dx() - self.dog_play_dx() + ball_dx;
+        b.dpose.roll = 0.0;
+        b.dpose.inside = false;
+        b.dpose.nap = 0.0;
+        b.dpose.spin = side;
+        let mut need: f32 = 0.0;
+        for (run, down) in [(true, 0.0), (false, 1.0)] {
+            b.dpose.walking = run;
+            b.dpose.running = run;
+            b.dpose.head_down = down;
+            need = need.max(self.house_overlap(&b));
+        }
+        need
+    }
+
+    /// Keep the standing dog clear of the doghouse: step right at once when its pose would
+    /// reach over the house, drift back while it walks once it no longer needs to.
+    fn dog_keep_clear(&mut self, dt: f32) {
+        let body = self.dog_host_body();
+        let p = &body.dpose;
+        let free = p.seated() || p.inside || p.roll > 0.0 || self.dog.nap_k > 0.0;
+        if free {
+            if p.inside || self.dog.nap_k > 0.0 {
+                self.dog.clear_dx = 0.0;
+            }
+            return;
+        }
+        let need = self.house_overlap(&body);
+        if need >= self.dog.clear_dx {
+            self.dog.clear_dx = need;
+        } else {
+            self.dog.clear_dx = (self.dog.clear_dx - 6.0 * dt).max(need);
+        }
     }
 
     /// The thrown ball in cell coordinates while it is on screen and not in the mouth.
@@ -884,6 +946,8 @@ impl Pet for DogPet {
         if app.t >= app.dog.next_wag + 0.8 {
             app.dog.next_wag = app.t + app.rng.random_range(3.0..8.0);
         }
+        // last, once facing and pose for this frame are settled
+        app.dog_keep_clear(dt);
     }
     fn msg_for(&self, k: Key) -> &'static str {
         App::dog_msg(k)
@@ -943,8 +1007,16 @@ impl Pet for DogPet {
                 app.dart_from = (app.dog_play_dx(), 0.0);
                 app.dart_s = 0.0;
                 let lim = (app.w as f32 / 2.0 - g.maxw * 1.3).max(0.0);
-                let side = if app.rng.random_bool(0.5) { 1.0 } else { -1.0 };
+                let mut side = if app.rng.random_bool(0.5) { 1.0 } else { -1.0 };
                 app.dog.ball_dx = side * lim * app.rng.random_range(0.6..=1.0);
+                if side < 0.0 {
+                    // the ball stops short of the doghouse, where the dog can still reach it
+                    app.dog.ball_dx += app.ball_reach_need(app.dog.ball_dx, side);
+                    if app.dog.ball_dx > -0.3 * lim {
+                        side = 1.0;
+                        app.dog.ball_dx = lim * app.rng.random_range(0.6..=1.0);
+                    }
+                }
                 app.dog.face = side;
                 app.dog.bark_t = 0.6;
                 app.play.dur = app.play.dur.max(app.play.st + PLAY_LEN);
@@ -1246,6 +1318,59 @@ mod tests {
             }
             assert!(carried, "flip {flip}");
         }
+    }
+
+    /// Leftmost drawn column of the dog as it is on screen (clearance push included).
+    fn drawn_left(a: &App) -> i32 {
+        let body = a.dog_host_body();
+        let mut cv = crate::art::Canvas::new(a.w, a.h, false);
+        crate::dog_art::draw_dog(&mut cv, &body);
+        (0..cv.w)
+            .find(|&x| (0..cv.h).any(|y| cv.cells[y * cv.w + x].fg.is_some()))
+            .map_or(i32::MAX, |x| x as i32)
+    }
+
+    #[test]
+    fn standing_dog_never_reaches_over_the_doghouse() {
+        let mut left_fetches = 0;
+        for (w, h) in [(120u16, 40u16), (200, 50), (90, 30)] {
+            for seed in 1..=8u64 {
+                let mut a = dog(w, h, seed);
+                a.init_color((seed as usize) % 11, false);
+                a.pos = -1.0;
+                let house = crate::dog_art::house_right(w, h);
+                for i in 0..(70 * 16) {
+                    if i % (7 * 16) == 3 * 16 {
+                        a.dog.chase = (-1.0, CHASE_T);
+                    }
+                    if i % (7 * 16) == 0 {
+                        a.press(if i % (21 * 16) == 0 {
+                            Key::Pet
+                        } else {
+                            Key::Play
+                        });
+                        if a.dog.ball_dx < 0.0 && a.play.on {
+                            left_fetches += 1;
+                        }
+                    }
+                    a.update(1.0 / 16.0);
+                    let p = a.dog_host_body().dpose;
+                    if p.seated() || p.inside || p.roll > 0.0 || a.dog.nap_k > 0.0 {
+                        continue;
+                    }
+                    let left = drawn_left(&a);
+                    assert!(
+                        left > house + 1,
+                        "{w}x{h} seed {seed} t {:.2}: dog at col {left}, house ends {house}; clear {} state {:?} pose {:?}",
+                        a.t,
+                        a.dog.clear_dx,
+                        a.state,
+                        p
+                    );
+                }
+            }
+        }
+        assert!(left_fetches > 5, "only {left_fetches} fetches to the left");
     }
 
     #[test]
