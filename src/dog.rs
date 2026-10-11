@@ -6,7 +6,7 @@ use super::{App, BOOP, BURST, Behavior, Heart, Key, Kind, State, ease};
 use crate::art::{Body, Canvas, Geo, Rgb};
 use crate::link::Msg;
 use crate::pet::{Pet, Throw};
-use crate::social::Guest;
+use crate::social::{GPhase, Guest};
 use rand::Rng;
 use rand::seq::SliceRandom;
 
@@ -245,6 +245,8 @@ pub struct DogState {
     pub next_wag: f32,
     /// Columns the standing dog is pushed right so it never overlaps the doghouse.
     pub clear_dx: f32,
+    /// Widest half-width (columns) a visiting squid was seen drawn at, for this pane size.
+    pub squid_half: Option<(u16, u16, f32)>,
 }
 
 /// Everything about the dog's pose that is not already in `Body`.
@@ -597,6 +599,21 @@ impl App {
             + self.dog.clear_dx
     }
 
+    /// First column the standing dog may reach on the left: past the doghouse, and past a
+    /// visiting squid floating between the house and the dog.
+    fn yard_left(&self) -> f32 {
+        let mut left = (crate::dog_art::house_right(self.w, self.h) + 2) as f32;
+        let dog_x = self.geo().cx as f32 + self.host_dx;
+        let half = squid_guest_half(self);
+        for g in &self.guests {
+            let x = squid_drawn_x(g);
+            if g.kind == Kind::Squid && x < dog_x {
+                left = left.max(x + half + 2.0);
+            }
+        }
+        left
+    }
+
     /// Leftmost and rightmost columns of the dog drawn as `body` (without `clear_dx`),
     /// measured past the pane edges by probing it shifted back into view.
     fn dog_extent(&self, body: &Body) -> (f32, f32) {
@@ -652,7 +669,7 @@ impl App {
             lo = lo.min(l);
             hi = hi.max(r);
         }
-        let clear = (crate::dog_art::house_right(self.w, self.h) + 2) as f32;
+        let clear = self.yard_left();
         let edge = self.w as f32 - 1.0;
         if lo < clear {
             clear - lo
@@ -665,7 +682,64 @@ impl App {
 
     /// Keep the standing dog clear of the doghouse: step right at once when its pose would
     /// reach over the house, drift back while it walks once it no longer needs to.
+    /// Measure how wide a visiting squid is drawn: the columns left of the dog that change
+    /// when the squid is taken out of the scene. Keeps the widest seen for this pane size.
+    fn measure_squid_guest(&mut self) {
+        let Some(i) = self
+            .guests
+            .iter()
+            .position(|g| g.kind == Kind::Squid && g.phase == GPhase::Present && g.startle <= 0.0)
+        else {
+            return;
+        };
+        let mut dv = crate::art::Canvas::new(self.w, self.h, false);
+        crate::dog_art::draw_dog(&mut dv, &self.dog_host_body());
+        let dog_left = (0..dv.w)
+            .find(|&x| (0..dv.h).any(|y| dv.cells[y * dv.w + x].fg.is_some()))
+            .unwrap_or(dv.w);
+        let x0 = self.guests[i].x;
+        let gx = squid_drawn_x(&self.guests[i]);
+        if gx + 1.0 >= dog_left as f32 {
+            return;
+        }
+        let with = crate::art::render(self, false);
+        self.guests[i].x = -10_000.0;
+        let without = crate::art::render(self, false);
+        self.guests[i].x = x0;
+        let n = dog_left.saturating_sub(1).min(with.w);
+        let changed = |x: usize| {
+            (0..with.h).any(|y| {
+                let k = y * with.w + x;
+                with.cells[k].ch != without.cells[k].ch || with.cells[k].fg != without.cells[k].fg
+            })
+        };
+        // the run of changed columns around the squid (gaps of up to 2 between tentacles)
+        let c = (gx.round().max(0.0) as usize).min(n.saturating_sub(1));
+        let (mut lo, mut hi) = (c, c);
+        let mut x = c;
+        while x > 0 && (1..=3).any(|d| x >= d && changed(x - d)) {
+            x = (1..=3)
+                .find(|&d| x >= d && changed(x - d))
+                .map_or(x, |d| x - d);
+            lo = x;
+        }
+        let mut x = c;
+        while x + 1 < n && (1..=3).any(|d| x + d < n && changed(x + d)) {
+            x = (1..=3)
+                .find(|&d| x + d < n && changed(x + d))
+                .map_or(x, |d| x + d);
+            hi = x;
+        }
+        let half = (gx - lo as f32).max(hi as f32 - gx) + 1.0;
+        let seen = match self.dog.squid_half {
+            Some((w, h, v)) if (w, h) == (self.w, self.h) => v,
+            _ => 0.0,
+        };
+        self.dog.squid_half = Some((self.w, self.h, seen.max(half)));
+    }
+
     fn dog_keep_clear(&mut self, dt: f32) {
+        self.measure_squid_guest();
         let body = self.dog_host_body();
         let p = &body.dpose;
         let free = p.seated() || p.inside || p.roll > 0.0 || self.dog.nap_k > 0.0;
@@ -690,7 +764,7 @@ impl App {
     /// `clear_dx`) clear of the doghouse and inside the right edge; the house wins.
     fn yard_range(&self, body: &Body) -> (f32, f32) {
         let (left, right) = self.dog_extent(body);
-        let clear = (crate::dog_art::house_right(self.w, self.h) + 2) as f32;
+        let clear = self.yard_left();
         let edge = self.w as f32 - 2.0;
         let lo = clear - left;
         let hi = (edge - right).max(lo);
@@ -952,6 +1026,24 @@ pub static DOG: DogPet = DogPet;
 
 /// A squid guest's size factor (absolute, not relative to the host's) and height in rows:
 /// 0.6 of the seated dog's height.
+/// Column a visiting squid is drawn centred on (it jets aside when startled).
+fn squid_drawn_x(g: &Guest) -> f32 {
+    g.x + g.fx.dx - g.startle_dir * g.jerk()
+}
+
+/// Half the width of a visiting squid with its tentacle tips: as measured on screen once
+/// one has been drawn in this pane, a generous estimate before that.
+fn squid_guest_half(app: &App) -> f32 {
+    if let Some((w, h, half)) = app.dog.squid_half
+        && (w, h) == (app.w, app.h)
+    {
+        return half;
+    }
+    let (s, _) = squid_guest_size(app);
+    let g = crate::art::geo_s(app.w, app.h, s);
+    (g.hwh * 0.9 * 3.4 + g.maxw * 0.5).max(g.maxw + 2.0)
+}
+
 fn squid_guest_size(app: &App) -> (f32, i32) {
     let (_, hh) = crate::dog_art::seat_dims(app.w, app.h, app.scale);
     let s = 0.57 * (hh + 1.0) / (app.h as f32 * 0.8);
@@ -1189,9 +1281,7 @@ impl Pet for DogPet {
         }
         // keep the squid (tentacle tips included) on the open lawn, clear of the doghouse
         // and of the seated dog
-        let (s, _) = squid_guest_size(app);
-        let g = crate::art::geo_s(app.w, app.h, s);
-        let half = (g.hwh * 0.9 * 3.4 + g.maxw * 0.5).max(g.maxw + 2.0);
+        let half = squid_guest_half(app);
         let (ww, _) = crate::dog_art::seat_dims(app.w, app.h, app.scale);
         let dog_x = app.geo().cx as f32 + app.host_dx;
         let dog_half = 0.45 * ww;
@@ -1199,7 +1289,8 @@ impl Pet for DogPet {
             let house = crate::dog_art::house_right(app.w, app.h) as f32 + 1.0;
             let (lo, hi) = (house + half + 1.0, dog_x - dog_half - half - 1.0);
             if lo <= hi {
-                (lo + hi) / 2.0
+                // next to the house, leaving the standing dog the most room to play
+                lo
             } else {
                 (house + dog_x - dog_half) / 2.0
             }
@@ -1640,6 +1731,7 @@ mod tests {
 
     #[test]
     fn fetch_with_a_guest_stays_in_the_yard() {
+        let mut guest_frames = 0;
         for (w, h) in [(120u16, 40u16), (200, 50)] {
             let mut a = squid_guest(w, h, 2.0);
             let house = crate::dog_art::house_right(w, h);
@@ -1647,6 +1739,9 @@ mod tests {
                 a.press(Key::Play);
                 for _ in 0..(9 * 16) {
                     a.update(1.0 / 16.0);
+                    if a.guests.is_empty() {
+                        a.on_msg(2, Msg::Arrive(0));
+                    }
                     hello(&mut a, 2, false);
                     let body = a.host_body();
                     let mut cv = crate::art::Canvas::new(w, h, false);
@@ -1654,9 +1749,18 @@ mod tests {
                     let col = |x: usize| (0..cv.h).any(|y| cv.cells[y * cv.w + x].fg.is_some());
                     let left = (0..cv.w).find(|&x| col(x)).unwrap_or(cv.w) as i32;
                     let right = (0..cv.w).rev().find(|&x| col(x)).unwrap_or(0);
+                    let standing = !body.dpose.seated() && body.dpose.roll == 0.0;
                     assert!(
-                        right + 1 < cv.w,
-                        "{w}x{h} throw {throw} t {:.2}: dog runs off the right edge; clear {} ball {} dx {} pose {:?}",
+                        !standing || right + 1 < cv.w,
+                        "{w}x{h} guests {:?} throw {throw} t {:.2}: dog runs off the right edge; clear {} ball {} dx {} pose {:?}",
+                        (
+                            a.guests
+                                .iter()
+                                .map(|g| (g.x, g.phase, g.startle))
+                                .collect::<Vec<_>>(),
+                            a.dog.squid_half,
+                            crate::dog_art::house_right(w, h)
+                        ),
                         a.t,
                         a.dog.clear_dx,
                         a.dog.ball_dx,
@@ -1672,10 +1776,23 @@ mod tests {
                             a.dog.ball_dx,
                             body.dpose
                         );
+                        if let Some(g) = a.guests.first() {
+                            guest_frames += 1;
+                            let sq = squid_drawn_x(g) + squid_guest_half(&a);
+                            assert!(
+                                left as f32 > sq,
+                                "{w}x{h} throw {throw} t {:.2}: dog at col {left} over the squid (ends {sq})",
+                                a.t
+                            );
+                        }
                     }
                 }
             }
         }
+        assert!(
+            guest_frames > 500,
+            "guest present in only {guest_frames} standing frames"
+        );
     }
 
     /// Dev helper: `SNAP_DIR=/tmp/x cargo test snap_guest` writes the dog hosting a squid.
