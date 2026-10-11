@@ -592,7 +592,7 @@ impl App {
         if self.pet.on {
             let r = &self.pet;
             p.wag = 1.0;
-            p.roll = ease((r.st - 0.4) / 0.5) * (1.0 - ease((r.st - (r.dur - 0.6)) / 0.5));
+            p.roll = ease((r.st - 0.3) / 1.1) * (1.0 - ease((r.st - (r.dur - 1.3)) / 1.1));
             p.tongue = p.tongue.max(0.6 * p.roll);
             p.open = p.open.max(0.3 * p.roll);
         }

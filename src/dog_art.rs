@@ -222,8 +222,10 @@ impl<'a> Rig<'a> {
         let br: &'a Breed = &BREEDS[body.breed.min(BREEDS.len() - 1)];
         let p = &body.dpose;
         let m = g.maxw * br.size * 1.6;
-        let ll = (0.15 * m * br.leg).max(1.0);
-        let rv = 0.13 * m;
+        // mid-roll the dog is on its side: body flattened, legs foreshortened
+        let tum = 1.0 - (p.roll.clamp(0.0, 1.0) * std::f32::consts::PI).sin();
+        let ll = (0.15 * m * br.leg * (0.35 + 0.65 * tum)).max(1.0);
+        let rv = 0.13 * m * (0.6 + 0.4 * tum);
         let vb = ll + rv;
         let hru = 0.17 * m;
         let hrv = 0.15 * m;
@@ -240,7 +242,7 @@ impl<'a> Rig<'a> {
             oy += p.crouch;
         }
         if p.roll > 0.0 && !flip {
-            hv += p.roll * 2.0;
+            hv -= (1.0 - tum) * 1.5;
         }
         hu += 0.0;
         Rig {
@@ -434,6 +436,8 @@ fn draw_leg(r: &Rig, cv: &mut Canvas, p: &crate::dog::DogPose, u0: f32, ph: f32,
         0.0
     };
     // on its back the legs are bent and paw at the air
+    let side = (p.roll * std::f32::consts::PI).sin();
+    let swing = swing + side * 0.08 * r.m * if far { -1.0 } else { 1.0 };
     let (swing, lift) = if r.flip {
         let k = (r.t * 9.0 + ph).sin();
         (k * 0.04 * r.m, r.ll * 0.45 + (k * 0.5 + 0.5) * r.ll * 0.2)
@@ -673,7 +677,7 @@ pub fn draw_dog(cv: &mut Canvas, body: &Body) {
     draw_leg(&r, cv, p, -0.32 * m, 0.0, true);
     draw_leg(&r, cv, p, 0.26 * m, std::f32::consts::PI, true);
     draw_tail(&r, cv, p);
-    let belly = if r.flip { b_light(&r) } else { None };
+    let belly: Option<Rgb> = None;
     r.ell(cv, (-0.02 * m, r.vb), (r.ru, r.rv), &|u, v, x, y| {
         if let Some(c) = belly {
             ('\u{2588}', c)
@@ -751,10 +755,6 @@ pub fn draw_dog(cv: &mut Canvas, body: &Body) {
 
 fn u0(ox: f32) -> f32 {
     ox
-}
-
-fn b_light(r: &Rig) -> Option<Rgb> {
-    Some(r.br.light)
 }
 
 /// Napping in the doghouse: just the head at the door and the tail on the grass beside it.
