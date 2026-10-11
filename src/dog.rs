@@ -269,7 +269,8 @@ pub struct DogPose {
     pub fast_ph: f32,
     /// Horizontal squash for a turn (1 facing right, -1 facing left).
     pub spin: f32,
-    /// 0..1 rolled over onto its back.
+    /// Roll-over flipbook: 0 when not rolling, else `pose + progress` with pose 1..=5
+    /// (see [`RollPose`]) and progress 0..1 through that pose.
     pub roll: f32,
     /// Whole-body shake amplitude.
     pub shake: f32,
@@ -301,6 +302,69 @@ impl DogPose {
             || self.carry == 2
             || self.spin.abs() < 0.999)
     }
+}
+
+/// The hand-drawn poses of the `p` roll-over, played in this order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RollPose {
+    /// Tipping over sideways from the seated pose.
+    Tip,
+    /// Lying on its side, belly and legs toward the viewer.
+    SideA,
+    /// On its back, four legs up, belly showing, head upside down.
+    Back,
+    /// Lying on the other side, back toward the viewer.
+    SideB,
+    /// On its belly, head up, front paws forward, about to sit up.
+    Rise,
+}
+
+/// Seconds spent in each roll pose; the belly-up pose takes whatever is left.
+pub const ROLL_TIP: f32 = 0.7;
+pub const ROLL_SIDE: f32 = 0.5;
+pub const ROLL_RISE: f32 = 0.7;
+/// Shortest roll-over (belly-up for 1.5 s).
+pub const ROLL_LEN: f32 = ROLL_TIP + ROLL_SIDE + 1.5 + ROLL_SIDE + ROLL_RISE;
+
+impl DogPose {
+    /// The roll pose being shown and how far through it (0..1), or None when not rolling.
+    pub fn roll_pose(&self) -> Option<(RollPose, f32)> {
+        if self.roll < 1.0 {
+            return None;
+        }
+        let k = self.roll.fract();
+        let pose = match self.roll as u32 {
+            1 => RollPose::Tip,
+            2 => RollPose::SideA,
+            3 => RollPose::Back,
+            4 => RollPose::SideB,
+            _ => RollPose::Rise,
+        };
+        Some((pose, k))
+    }
+}
+
+/// Flipbook position (`DogPose::roll`) at `st` seconds into a pet reaction of `dur` seconds.
+pub fn roll_at(st: f32, dur: f32) -> f32 {
+    let back_end = (dur - ROLL_SIDE - ROLL_RISE).max(ROLL_TIP + ROLL_SIDE + 0.1);
+    let marks = [
+        0.0,
+        ROLL_TIP,
+        ROLL_TIP + ROLL_SIDE,
+        back_end,
+        back_end + ROLL_SIDE,
+        back_end + ROLL_SIDE + ROLL_RISE,
+    ];
+    if st < 0.0 || st >= marks[5] {
+        return 0.0;
+    }
+    for i in 0..5 {
+        if st < marks[i + 1] {
+            let k = (st - marks[i]) / (marks[i + 1] - marks[i]);
+            return (i + 1) as f32 + k.min(0.999);
+        }
+    }
+    0.0
 }
 
 impl Default for DogPose {
@@ -656,9 +720,11 @@ impl App {
         if self.pet.on {
             let r = &self.pet;
             p.wag = 1.0;
-            p.roll = ease((r.st - 0.3) / 1.1) * (1.0 - ease((r.st - (r.dur - 1.3)) / 1.1));
-            p.tongue = p.tongue.max(0.6 * p.roll);
-            p.open = p.open.max(0.3 * p.roll);
+            p.roll = roll_at(r.st, r.dur);
+            if p.roll > 0.0 {
+                p.tongue = 1.0;
+                p.open = p.open.max(0.3);
+            }
         }
         // biscuit: watch it, catch it, or pick it off the grass
         if self.feed.on
@@ -842,7 +908,11 @@ impl Pet for DogPet {
                 app.add_fish((sx, mode));
             }
             Key::Pet => {
+                let fresh = !app.pet.on;
                 app.bump(k, 3.0);
+                if fresh {
+                    app.pet.dur = app.pet.dur.max(ROLL_LEN);
+                }
                 let n = app.rng.random_range(3..=5);
                 for _ in 0..n {
                     let x = app.spawn_x() + app.rng.random_range(-g.hwh..=g.hwh);
@@ -1188,6 +1258,132 @@ mod tests {
                 a.update(1.0 / 16.0);
             }
             ansi(&a, n);
+        }
+    }
+
+    /// Dev helper: `SNAP_DIR=/tmp/x cargo test snap_roll` writes ANSI frames of every roll
+    /// pose (the real render at the pose's time) and seated / standing / walking stills.
+    #[test]
+    fn snap_roll() {
+        let Ok(dir) = std::env::var("SNAP_DIR") else {
+            return;
+        };
+        let breed: usize = std::env::var("SNAP_BREED")
+            .ok()
+            .and_then(|b| b.parse().ok())
+            .unwrap_or(0);
+        let (w, h) = std::env::var("SNAP_SIZE")
+            .ok()
+            .and_then(|s| {
+                let (a, b) = s.split_once('x')?;
+                Some((a.parse().ok()?, b.parse().ok()?))
+            })
+            .unwrap_or((120u16, 40u16));
+        let save = |cv: &crate::art::Canvas, name: &str| {
+            let mut out = String::new();
+            for y in 0..cv.h {
+                for x in 0..cv.w {
+                    let c = cv.cells[y * cv.w + x];
+                    match c.fg {
+                        Some((r, g, b)) => out.push_str(&format!("\x1b[38;2;{r};{g};{b}m{}", c.ch)),
+                        None => out.push_str(&format!("\x1b[0m{}", c.ch)),
+                    }
+                }
+                out.push_str("\x1b[0m\n");
+            }
+            std::fs::write(format!("{dir}/{name}.ans"), out).unwrap();
+        };
+        let fresh = || {
+            let mut a = dog(w, h, 5);
+            a.init_color(breed, false);
+            a.state = State::Idle;
+            a.st = 0.0;
+            a.dog.next_wag = 1e9;
+            a
+        };
+        let mut a = fresh();
+        a.press(Key::Pet);
+        let mut t = 0.0;
+        for (name, at) in [
+            ("roll1_tip", 0.4),
+            ("roll2_side", 0.95),
+            ("roll3_back", 1.6),
+            ("roll3_back_b", 2.3),
+            ("roll4_side", 3.0),
+            ("roll5_rise", 3.6),
+        ] {
+            while t < at {
+                a.update(1.0 / 16.0);
+                a.state = State::Idle;
+                t += 1.0 / 16.0;
+            }
+            assert!(a.dog_pose().roll_pose().is_some(), "{name} not rolling");
+            save(&crate::art::render(&a, false), name);
+        }
+        // stills of one body in three poses, drawn on the yard
+        let a = fresh();
+        let still = |name: &str, f: &dyn Fn(&mut DogPose)| {
+            let mut body = a.dog_host_body();
+            body.blink = false;
+            body.closed = false;
+            f(&mut body.dpose);
+            let mut cv = crate::art::Canvas::new(w, h, false);
+            crate::dog_art::draw_yard(&mut cv, &a);
+            crate::dog_art::draw_dog_into(&mut cv, &body, false, 0, w, h);
+            save(&cv, name);
+        };
+        still("pose_seated", &|_| {});
+        still("pose_stand", &|p| p.up = true);
+        still("pose_walk", &|p| {
+            p.walking = true;
+            p.step = 1.0;
+        });
+        still("pose_run", &|p| {
+            p.running = true;
+            p.step = 2.5;
+            p.open = 0.5;
+            p.tongue = 1.0;
+        });
+        still("pose_sniff", &|p| {
+            p.head_down = 1.0;
+            p.up = true;
+        });
+    }
+
+    /// Standing is about as tall as sitting (within 10%) in every breed, measured on the
+    /// drawn cells at 120x40.
+    #[test]
+    fn standing_matches_seated_size() {
+        let extent = |cv: &crate::art::Canvas| {
+            let (mut y0, mut y1, mut x0, mut x1) = (usize::MAX, 0, usize::MAX, 0);
+            for y in 0..cv.h {
+                for x in 0..cv.w {
+                    if cv.cells[y * cv.w + x].ch != ' ' {
+                        (y0, y1, x0, x1) = (y0.min(y), y1.max(y), x0.min(x), x1.max(x));
+                    }
+                }
+            }
+            (y1 + 1 - y0, x1 + 1 - x0)
+        };
+        for (breed, br) in BREEDS.iter().enumerate() {
+            let mut a = dog(120, 40, 5);
+            a.init_color(breed, false);
+            let draw = |f: &dyn Fn(&mut DogPose)| {
+                let mut body = a.dog_host_body();
+                f(&mut body.dpose);
+                let mut cv = crate::art::Canvas::new(120, 40, false);
+                crate::dog_art::draw_dog_into(&mut cv, &body, false, 0, 120, 40);
+                extent(&cv)
+            };
+            let (sit_h, _) = draw(&|_| {});
+            let (stand_h, _) = draw(&|p| p.up = true);
+            let ratio = stand_h as f32 / sit_h as f32;
+            eprintln!("{}: seated {sit_h} standing {stand_h}", br.name);
+            assert!(
+                (0.9..=1.1).contains(&ratio),
+                "{}: seated {sit_h} rows, standing {stand_h}",
+                br.name
+            );
         }
     }
 
