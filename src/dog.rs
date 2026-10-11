@@ -1,0 +1,1198 @@
+//! The dog: breeds, per-dog animation state and the `App` methods that drive it.
+//! Drawing lives in `dog_art`. Everything here only runs when `App::kind` is `Dog`.
+//! `DogPet` implements the shared `Pet` trait and routes the engine to the methods below.
+//! (Step 2 of the wiki's Adding-a-pet.md: this is the `src/<pet>.rs` file.)
+use super::{App, BOOP, BURST, Behavior, Heart, Key, Kind, State, ease};
+use crate::art::{Body, Canvas, Geo, Rgb};
+use crate::link::Msg;
+use crate::pet::{Pet, Throw};
+use crate::social::Guest;
+use rand::Rng;
+use rand::seq::SliceRandom;
+
+/// Coat markings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pat {
+    Plain,
+    /// White face mask, chest and belly.
+    Husky,
+    Dalmatian,
+    /// Dark saddle, white chest and tail tip.
+    Beagle,
+    Shepherd,
+    /// White chest and socks.
+    Corgi,
+    Poodle,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tail {
+    Plume,
+    Straight,
+    Curl,
+    Stub,
+    Pom,
+    Bushy,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Breed {
+    pub name: &'static str,
+    pub coat: Rgb,
+    /// Saddle, spots, ears or mask.
+    pub dark: Rgb,
+    /// Muzzle, chest and socks.
+    pub light: Rgb,
+    pub nose: Rgb,
+    pub eye: Rgb,
+    pub pat: Pat,
+    /// Leg length factor (the corgi is 0.5).
+    pub leg: f32,
+    /// Overall size factor.
+    pub size: f32,
+    pub ears_up: bool,
+    pub tail: Tail,
+}
+
+const NOSE: Rgb = (0x1A, 0x14, 0x14);
+const BROWN: Rgb = (0x3A, 0x24, 0x14);
+
+const fn b(name: &'static str, coat: Rgb, dark: Rgb, light: Rgb, pat: Pat) -> Breed {
+    Breed {
+        name,
+        coat,
+        dark,
+        light,
+        nose: NOSE,
+        eye: (0x24, 0x14, 0x0C),
+        pat,
+        leg: 1.0,
+        size: 1.0,
+        ears_up: false,
+        tail: Tail::Straight,
+    }
+}
+
+/// Cycle order for `c`.
+pub const BREEDS: [Breed; 8] = [
+    Breed {
+        tail: Tail::Plume,
+        ..b(
+            "golden",
+            (0xD8, 0xA0, 0x48),
+            (0xB8, 0x78, 0x28),
+            (0xF0, 0xD0, 0x90),
+            Pat::Plain,
+        )
+    },
+    Breed {
+        eye: (0xD8, 0xB0, 0x50),
+        ..b(
+            "lab",
+            (0x2A, 0x2A, 0x32),
+            (0x1E, 0x1E, 0x24),
+            (0x44, 0x44, 0x50),
+            Pat::Plain,
+        )
+    },
+    Breed {
+        ears_up: true,
+        tail: Tail::Curl,
+        eye: (0x50, 0xA8, 0xE8),
+        size: 1.05,
+        ..b(
+            "husky",
+            (0x78, 0x80, 0x90),
+            (0x3C, 0x40, 0x4C),
+            (0xF4, 0xF4, 0xFA),
+            Pat::Husky,
+        )
+    },
+    Breed {
+        ears_up: true,
+        tail: Tail::Stub,
+        leg: 0.5,
+        size: 0.95,
+        ..b(
+            "corgi",
+            (0xD8, 0x84, 0x3C),
+            (0xB0, 0x60, 0x24),
+            (0xF8, 0xEC, 0xDC),
+            Pat::Corgi,
+        )
+    },
+    Breed {
+        ..b(
+            "dalmatian",
+            (0xF2, 0xF2, 0xF4),
+            (0x20, 0x20, 0x26),
+            (0xFF, 0xFF, 0xFF),
+            Pat::Dalmatian,
+        )
+    },
+    Breed {
+        size: 0.9,
+        ..b(
+            "beagle",
+            (0xB8, 0x78, 0x40),
+            BROWN,
+            (0xFA, 0xF4, 0xE8),
+            Pat::Beagle,
+        )
+    },
+    Breed {
+        tail: Tail::Pom,
+        size: 1.0,
+        ..b(
+            "poodle",
+            (0xF6, 0xF6, 0xFA),
+            (0xDC, 0xDC, 0xE8),
+            (0xFF, 0xFF, 0xFF),
+            Pat::Poodle,
+        )
+    },
+    Breed {
+        ears_up: true,
+        tail: Tail::Bushy,
+        size: 1.1,
+        ..b(
+            "german shepherd",
+            (0xC4, 0x8C, 0x4C),
+            (0x24, 0x20, 0x20),
+            (0xE0, 0xB8, 0x80),
+            Pat::Shepherd,
+        )
+    },
+];
+
+/// Marker in `Fish::from.1`: the biscuit is tossed to be caught in the air...
+pub const TOSS_CATCH: f32 = -1.0;
+/// ... or tossed to land on the grass.
+pub const TOSS_LAND: f32 = -2.0;
+/// Seconds the dog fetches the ball for.
+pub const PLAY_LEN: f32 = 7.0;
+/// Seconds a dug hole stays open before it fills back in, and the filling time.
+pub const HOLE_STAY: f32 = 6.0;
+pub const HOLE_FILL: f32 = 1.5;
+/// Seconds the dog chases a toy mouse.
+pub const CHASE_T: f32 = 2.4;
+
+/// Per-dog animation state that the squid does not have.
+#[derive(Default)]
+pub struct DogState {
+    pub bag: Vec<Behavior>,
+    /// Facing: 1 right, -1 left.
+    pub face: f32,
+    prev_x: f32,
+    /// A dug hole: (x in cells, seconds since digging began, seconds the dig lasted or 0 while digging).
+    pub hole: Option<(f32, f32, f32)>,
+    /// Seconds of panting left after play.
+    pub warm: f32,
+    /// Chasing a toy mouse: (direction, seconds left).
+    pub chase: (f32, f32),
+    /// Seconds left of a bark pose.
+    pub bark_t: f32,
+    /// How far (0..1) the dog has gone into the doghouse.
+    pub nap_k: f32,
+    /// Play: ball target in cells from the start spot, and the side the ball was thrown to.
+    pub ball_dx: f32,
+    pub was_play: bool,
+    /// Biscuits alternate between catch-in-the-air and landing on the grass.
+    pub toss_flip: bool,
+    pub next_wag: f32,
+}
+
+/// Everything about the dog's pose that is not already in `Body`.
+#[derive(Clone, Copy, Debug)]
+pub struct DogPose {
+    pub walking: bool,
+    pub running: bool,
+    pub step: f32,
+    /// Tail wag amplitude 0..1 and phase.
+    pub wag: f32,
+    pub wag_ph: f32,
+    /// 0..1 nose to the ground.
+    pub head_down: f32,
+    /// -1..1 head up (+) or down a little (-): tracking a flying object.
+    pub look_up: f32,
+    /// -1..1 head tilt (boop).
+    pub tilt: f32,
+    pub open: f32,
+    pub tongue: f32,
+    pub bark: f32,
+    /// Front paws digging, hind leg scratching the ear: 0..1 and a fast phase.
+    pub dig: f32,
+    pub scratch: f32,
+    pub fast_ph: f32,
+    /// Horizontal squash for a turn (1 facing right, -1 facing left).
+    pub spin: f32,
+    /// 0..1 rolled over onto its back.
+    pub roll: f32,
+    /// Whole-body shake amplitude.
+    pub shake: f32,
+    /// Inside the doghouse: only the head and tail show.
+    pub inside: bool,
+    /// 0 nothing, 1 biscuit, 2 ball in the mouth.
+    pub carry: u8,
+    pub crouch: f32,
+    pub sniff: f32,
+    /// 0..1 how far into the doghouse the dog has gone.
+    pub nap: f32,
+}
+
+impl Default for DogPose {
+    fn default() -> Self {
+        DogPose {
+            walking: false,
+            running: false,
+            step: 0.0,
+            wag: 0.0,
+            wag_ph: 0.0,
+            head_down: 0.0,
+            look_up: 0.0,
+            tilt: 0.0,
+            open: 0.0,
+            tongue: 0.0,
+            bark: 0.0,
+            dig: 0.0,
+            scratch: 0.0,
+            fast_ph: 0.0,
+            spin: 1.0,
+            roll: 0.0,
+            shake: 0.0,
+            inside: false,
+            carry: 0,
+            crouch: 0.0,
+            sniff: 0.0,
+            nap: 0.0,
+        }
+    }
+}
+
+fn tri(s: f32, a: f32, b: f32) -> f32 {
+    if (a..b).contains(&s) {
+        (std::f32::consts::PI * (s - a) / (b - a)).sin()
+    } else {
+        0.0
+    }
+}
+
+/// Smooth in at `a`, out at `b` (each over `r` seconds).
+fn window(s: f32, a: f32, b: f32, r: f32) -> f32 {
+    ease((s - a) / r) * (1.0 - ease((s - (b - r)) / r))
+}
+
+impl App {
+    /// Switch this process to the dog (call right after `App::new`).
+    pub fn init_dog(&mut self) {
+        self.kind = Kind::Dog;
+        self.dog.face = 1.0;
+        self.dog.next_wag = self.t + self.rng.random_range(2.0..6.0);
+    }
+
+    fn dog_pick_idle(&mut self) -> Behavior {
+        if self.dog.bag.is_empty() {
+            let mut v = vec![
+                Behavior::Sniff,
+                Behavior::Dig,
+                Behavior::Nap,
+                Behavior::EarScratch,
+                Behavior::TailSpin,
+                Behavior::Bark,
+            ];
+            v.shuffle(&mut self.rng);
+            self.dog.bag = v;
+        }
+        self.dog.bag.pop().unwrap_or(Behavior::Sniff)
+    }
+
+    fn dog_start_idle(&mut self, b: Behavior) {
+        let ox = self.offset().0;
+        let x = self.geo().cx as f32 + ox;
+        match b {
+            Behavior::Dig => {
+                // the hole opens just ahead of the front paws
+                self.dog.hole = Some((x + self.dog.face * self.geo().maxw * 1.25, 0.0, 0.0));
+            }
+            Behavior::Bark => {
+                self.dog.bark_t = 1.0;
+                self.set_msg("Woof!");
+            }
+            Behavior::Nap => self.set_msg("Zzz..."),
+            _ => {}
+        }
+    }
+
+    /// Dust motes and seeds drifting through the yard.
+    fn dog_motes(&mut self, dt: f32) {
+        if self.bubbles.len() < 24 && self.rng.random_range(0.0..1.0) < 1.2 * dt {
+            let y = self.rng.random_range(4.0..(self.h as f32 - 12.0).max(5.0));
+            self.bubbles.push(super::Bubble {
+                x: self.rng.random_range(0.0..self.w as f32),
+                y,
+                vy: self.rng.random_range(0.6..1.6),
+                ch: ['.', '*', '\u{b0}'][self.rng.random_range(0..3)],
+                phase: self.rng.random_range(0.0..std::f32::consts::TAU),
+            });
+        }
+        for b in &mut self.bubbles {
+            b.y -= b.vy * dt * 0.3;
+            b.x += 0.8 * b.vy * dt;
+        }
+        let w = self.w as f32;
+        self.bubbles.retain(|b| b.y > 2.0 && b.x < w + 2.0);
+    }
+
+    fn dog_update(&mut self, dt: f32) {
+        let t = self.t;
+        self.dog.bark_t = (self.dog.bark_t - dt).max(0.0);
+        self.dog.warm = (self.dog.warm - dt).max(0.0);
+        self.dog.chase.1 = (self.dog.chase.1 - dt).max(0.0);
+        // nap: walk to the door, stay in, walk out
+        let want = match self.state {
+            State::IdleBehavior(Behavior::Nap) => {
+                f32::from(self.st < App::idle_duration(Behavior::Nap) - 1.4)
+            }
+            _ => 0.0,
+        };
+        let step = dt / 1.4;
+        self.dog.nap_k += (want - self.dog.nap_k).clamp(-step, step);
+        // the hole fills back in after a while
+        if let Some((x, age, len)) = self.dog.hole {
+            let digging = matches!(self.state, State::IdleBehavior(Behavior::Dig));
+            let age = age + dt;
+            let len = if digging {
+                0.0
+            } else if len == 0.0 {
+                age
+            } else {
+                len
+            };
+            self.dog.hole = if age - len > HOLE_STAY + HOLE_FILL {
+                None
+            } else {
+                Some((x, age, len))
+            };
+        }
+        // the ball is over: pant for a while
+        if self.play.on {
+            self.dog.was_play = true;
+        } else if self.dog.was_play {
+            self.dog.was_play = false;
+            self.dog.warm = 9.0;
+        }
+        // facing: follow the direction of travel, or the biscuit
+        let x = self.geo().cx as f32 + self.offset().0;
+        if (x - self.dog.prev_x).abs() > 0.03 {
+            self.dog.face = (x - self.dog.prev_x).signum();
+        }
+        self.dog.prev_x = x;
+        if self.feed.on
+            && let Some(f) = self.fish.last()
+            && self.fish_age(f) < 1.2
+        {
+            self.dog.face = (f.from.0 - x).signum();
+        }
+        if self.dog.chase.1 > 0.0 {
+            self.dog.face = self.dog.chase.0;
+        }
+        let _ = t;
+    }
+
+    /// Where the dog's play offset is (cells): runs to the ball, picks it up, brings it back.
+    pub fn dog_play_dx(&self) -> f32 {
+        if !self.play.on {
+            return 0.0;
+        }
+        let s = self.dart_s;
+        let from = self.dart_from.0;
+        let t = self.dog.ball_dx;
+        if s < 0.9 {
+            from * (1.0 - ease(s / 0.6))
+        } else if s < 2.8 {
+            let k = ease((s - 0.9) / 1.9);
+            from * (1.0 - ease(s / 0.6)) + (t - from * (1.0 - ease(s / 0.6))) * k
+        } else if s < 3.4 {
+            t
+        } else if s < 5.3 {
+            t * (1.0 - ease((s - 3.4) / 1.9))
+        } else {
+            0.0
+        }
+    }
+
+    fn dog_nap_dx(&self) -> f32 {
+        if self.dog.nap_k <= 0.0 {
+            return 0.0;
+        }
+        let door = crate::dog_art::door_x(self.w, self.h);
+        let base = self.geo().cx as f32
+            + self.wander()
+            + self.host_dx
+            + self.home_ox()
+            + self.fx.dx
+            + self.dog_play_dx();
+        (door - base) * ease(self.dog.nap_k)
+    }
+
+    fn dog_chase_dx(&self) -> f32 {
+        let (dir, left) = self.dog.chase;
+        if left <= 0.0 {
+            return 0.0;
+        }
+        let u = 1.0 - left / CHASE_T;
+        let reach = self.w as f32 * 0.28;
+        let k = if u < 0.45 {
+            ease(u / 0.45)
+        } else if u < 0.6 {
+            1.0
+        } else {
+            1.0 - ease((u - 0.6) / 0.4)
+        };
+        dir * reach * k
+    }
+
+    pub fn dog_dx(&self) -> f32 {
+        self.wander()
+            + self.host_dx
+            + self.home_ox()
+            + self.fx.dx
+            + self.dog_play_dx()
+            + self.dog_chase_dx()
+            + self.dog_nap_dx()
+    }
+
+    /// The thrown ball in cell coordinates while it is on screen and not in the mouth.
+    pub fn ball_pos(&self) -> Option<(f32, f32)> {
+        if !self.play.on || self.kind != Kind::Dog {
+            return None;
+        }
+        let s = self.dart_s;
+        let g = self.geo();
+        let feet = (g.top + g.mh + g.hh + g.al) as f32;
+        let base = g.cx as f32 + self.wander() + self.host_dx + self.home_ox() + self.fx.dx;
+        let start = (
+            base + self.dart_from.0 + self.dog.face * g.maxw * 0.5,
+            feet - g.maxw * 0.8,
+        );
+        let land = (base + self.dog.ball_dx, feet - 1.0);
+        if s < 1.0 {
+            let u = s / 1.0;
+            let x = start.0 + (land.0 - start.0) * u;
+            let y = start.1 + (land.1 - start.1) * u - 9.0 * 4.0 * u * (1.0 - u);
+            Some((x, y))
+        } else if s < 1.7 {
+            // bounce and roll a little further
+            let u = (s - 1.0) / 0.7;
+            let dir = (land.0 - start.0).signum();
+            Some((
+                land.0 + dir * 4.0 * ease(u),
+                land.1 - 2.5 * 4.0 * u * (1.0 - u),
+            ))
+        } else if s < 2.9 {
+            let dir = (land.0 - start.0).signum();
+            Some((land.0 + dir * 4.0, land.1))
+        } else if s < 5.3 {
+            None
+        } else if s < 5.7 {
+            // dropped at the feet
+            let u = (s - 5.3) / 0.4;
+            let m = self.dog_mouth_now();
+            let drop = (base + self.dog.face * g.maxw * 1.1, feet - 1.0);
+            Some((
+                m.0 + (drop.0 - m.0) * u,
+                m.1 + (drop.1 - m.1) * u - 2.0 * 4.0 * u * (1.0 - u),
+            ))
+        } else {
+            Some((base + self.dog.face * g.maxw * 1.1, feet - 1.0))
+        }
+    }
+
+    /// Where the dog's mouth is right now (cell coordinates).
+    pub fn dog_mouth_now(&self) -> (f32, f32) {
+        crate::dog_art::mouth_pos(self, &self.dog_host_body())
+    }
+
+    pub fn dog_pose(&self) -> DogPose {
+        let t = self.t;
+        let mut p = DogPose {
+            walking: self.burst.2 < BURST && self.home_ox() == 0.0 && self.dog.nap_k <= 0.0,
+            step: t * 9.0,
+            wag_ph: t * 14.0,
+            fast_ph: t * 30.0,
+            ..Default::default()
+        };
+        p.wag = if t < self.dog.next_wag + 0.8 && t >= self.dog.next_wag {
+            0.5
+        } else {
+            0.0
+        };
+        if self.t >= self.dog.next_wag + 0.8 {
+            // (scheduling is done in update; this keeps pose a pure function of state)
+        }
+        if self.dog.warm > 0.0 {
+            p.open = 0.4 + 0.15 * (t * 9.0).sin();
+            p.tongue = 1.0;
+        }
+        if let State::IdleBehavior(b) = self.state {
+            let st = self.st;
+            let d = App::idle_duration(b);
+            match b {
+                Behavior::Sniff => {
+                    p.head_down = window(st, 0.0, d, 0.6);
+                    p.sniff = p.head_down;
+                }
+                Behavior::Dig => {
+                    p.head_down = 0.7 * window(st, 0.0, d, 0.5);
+                    p.dig = window(st, 0.4, d - 0.4, 0.4);
+                }
+                Behavior::Nap => {
+                    p.inside = self.dog.nap_k >= 1.0;
+                }
+                Behavior::EarScratch => {
+                    p.scratch = window(st, 0.0, d, 0.4);
+                    p.tilt = 0.5 * p.scratch;
+                }
+                Behavior::TailSpin => {
+                    let k = window(st, 0.0, d, 0.5);
+                    let ph = st * std::f32::consts::TAU * 1.7;
+                    p.spin = if k > 0.0 { ph.cos() } else { 1.0 };
+                    p.wag = 1.0;
+                    p.running = false;
+                }
+                Behavior::Bark => {
+                    p.bark = tri(st, 0.3, 0.9);
+                    p.open = p.bark;
+                    p.look_up = 0.5 * p.bark;
+                }
+                _ => {}
+            }
+        }
+        if self.dog.bark_t > 0.0 && p.bark == 0.0 {
+            p.bark = tri(0.6 - self.dog.bark_t.min(0.6), 0.0, 0.6).max(0.0);
+            p.open = p.bark;
+            p.look_up = 0.4 * p.bark;
+        }
+        // boop: head tilt
+        if self.touch.boop > 0.0 {
+            p.tilt += (self.touch.boop / BOOP).clamp(0.0, 1.0) * 0.8;
+        }
+        // stroke: wag and lean in
+        if self.touch.touch > 0.0 {
+            p.wag = p.wag.max(ease(self.touch.touch));
+        }
+        // shake-off after ink, and the scroll ruffle
+        if let Some((left, _)) = self.splat
+            && left < 1.4
+        {
+            p.shake = (left / 0.5).clamp(0.3, 1.0);
+        }
+        p.shake = p.shake.max(self.touch.ruffle_k());
+        // pet: wag hard, roll over
+        if self.pet.on {
+            let r = &self.pet;
+            p.wag = 1.0;
+            p.roll = ease((r.st - 0.4) / 0.5) * (1.0 - ease((r.st - (r.dur - 0.6)) / 0.5));
+            p.tongue = p.tongue.max(0.6 * p.roll);
+            p.open = p.open.max(0.3 * p.roll);
+        }
+        // biscuit: watch it, catch it, or pick it off the grass
+        if self.feed.on
+            && let Some(f) = self.fish.last()
+        {
+            let a = self.fish_age(f);
+            let land = f.from.1 == TOSS_LAND;
+            if land {
+                if a < 0.9 {
+                    p.look_up = 0.5;
+                } else if a < 1.9 {
+                    p.head_down = ease((a - 0.9) / 0.5) * (1.0 - ease((a - 1.4) / 0.5));
+                }
+                if a >= 1.4 {
+                    p.carry = 1;
+                }
+            } else {
+                if a < 1.1 {
+                    p.look_up = 0.8;
+                    p.open = ease((a - 0.5) / 0.4);
+                } else {
+                    p.carry = 1;
+                }
+            }
+            if p.carry == 1 {
+                p.open = p.open.max(0.35 * (1.0 + (a * 22.0).sin()).abs() * 0.5);
+            }
+            p.wag = p.wag.max(0.6);
+        }
+        // ball: watch, run, pick up, bring back, drop, wag
+        if self.play.on {
+            let s = self.dart_s;
+            p.crouch = tri(s, 0.1, 0.9);
+            p.look_up = p.look_up.max(0.6 * tri(s, 0.0, 1.4));
+            let moving = (0.9..2.8).contains(&s) || (3.4..5.3).contains(&s);
+            if moving {
+                p.running = true;
+                p.walking = false;
+                p.step = t * 20.0;
+                p.open = 0.5;
+                p.tongue = 1.0;
+            }
+            p.head_down = p.head_down.max(window(s, 2.6, 3.4, 0.25));
+            if (2.9..5.4).contains(&s) {
+                p.carry = 2;
+            }
+            if s >= 5.3 {
+                p.wag = 1.0;
+                p.open = 0.5;
+                p.tongue = 1.0;
+            }
+        }
+        if self.dog.chase.1 > 0.0 {
+            p.running = true;
+            p.walking = false;
+            p.step = t * 20.0;
+            p.open = 0.5;
+            p.tongue = 1.0;
+            p.wag = 0.7;
+        }
+        p.walking &= !p.running;
+        p.nap = self.dog.nap_k;
+        p
+    }
+
+    /// Draw data for the host dog.
+    pub fn dog_host_body(&self) -> Body {
+        let g = self.geo();
+        let (dx, dy) = self.offset();
+        let pose = self.dog_pose();
+        Body {
+            kind: Kind::Dog,
+            breed: self.color_idx(),
+            breed_from: self.breed_from,
+            bfade: ease(self.fade),
+            boop: (self.touch.boop / BOOP).clamp(0.0, 1.0),
+            dpose: DogPose {
+                // face is carried in `dir` of the pose via spin sign
+                spin: pose.spin * self.dog.face,
+                ..pose
+            },
+            cx: g.cx,
+            dx,
+            dy,
+            scale: self.scale,
+            blush: self.blush(),
+            flash: self.flash(),
+            bright: self.fx.bright,
+            dark: self.fx.dark,
+            closed: self.eyes_closed() || pose.inside,
+            blink: self.blinking(),
+            lean: 0.0,
+            food_x: g.cx as f32 + dx,
+            t: self.t,
+            touch: ease(self.touch.touch),
+            touch_at: self.touch.at,
+            ruffle: self.touch.ruffle_k(),
+            ruffle_at: self.touch.ruffle_at,
+            head_dy: self.touch.dy(),
+            dir: self.touch.dir,
+            splat: self.splat,
+            ..Body::default()
+        }
+    }
+
+    pub(crate) fn dog_msg(k: Key) -> &'static str {
+        match k {
+            Key::Feed => "Crunch!",
+            Key::Pet => "Good dog \u{2665}",
+            Key::Play => "Fetch!",
+        }
+    }
+}
+
+pub struct DogPet;
+pub static DOG: DogPet = DogPet;
+
+impl Pet for DogPet {
+    fn kind(&self) -> Kind {
+        Kind::Dog
+    }
+    fn name(&self) -> &'static str {
+        "dog"
+    }
+    fn breeds(&self) -> Vec<&'static str> {
+        BREEDS.iter().map(|b| b.name).collect()
+    }
+    fn init(&self, app: &mut App) {
+        app.init_dog();
+    }
+    fn geo(&self, w: u16, h: u16, scale: f32) -> Geo {
+        crate::dog_art::geo_dog(w, h, scale)
+    }
+    fn pick_idle(&self, app: &mut App) -> Behavior {
+        app.dog_pick_idle()
+    }
+    fn start_idle(&self, app: &mut App, b: Behavior) {
+        app.dog_start_idle(b);
+    }
+    fn update(&self, app: &mut App, dt: f32) {
+        app.dog_motes(dt);
+        app.dog_update(dt);
+        if app.t >= app.dog.next_wag + 0.8 {
+            app.dog.next_wag = app.t + app.rng.random_range(3.0..8.0);
+        }
+    }
+    fn msg_for(&self, k: Key) -> &'static str {
+        App::dog_msg(k)
+    }
+    fn boop_msg(&self) -> &'static str {
+        "Arf?"
+    }
+    fn mote_chars(&self) -> [char; 3] {
+        ['.', '*', '\u{b0}']
+    }
+    fn stream_char(&self) -> char {
+        '*'
+    }
+    fn hints(&self, social: bool) -> &'static str {
+        if social {
+            "[f] biscuit   [p] pet   [space] ball   [v] visit   [c] breed   [q] quit"
+        } else {
+            "[f] biscuit   [p] pet   [space] ball   [c] breed   [q] quit"
+        }
+    }
+    fn on_press(&self, app: &mut App, k: Key) {
+        let g = app.geo();
+        match k {
+            Key::Feed => {
+                // toss from a random side; alternate catching it and letting it land
+                let x = g.cx as f32 + app.dog_dx();
+                let side = if app.rng.random_bool(0.5) { 1.0 } else { -1.0 };
+                let sx = (x + side * app.w as f32 * 0.42).clamp(2.0, app.w as f32 - 3.0);
+                app.dog.toss_flip = !app.dog.toss_flip;
+                let mode = if app.dog.toss_flip {
+                    TOSS_CATCH
+                } else {
+                    TOSS_LAND
+                };
+                app.add_fish((sx, mode));
+            }
+            Key::Pet => {
+                app.bump(k, 3.0);
+                let n = app.rng.random_range(3..=5);
+                for _ in 0..n {
+                    let x = app.spawn_x() + app.rng.random_range(-g.hwh..=g.hwh);
+                    let age = -app.rng.random_range(0.0..0.6);
+                    app.hearts.push(Heart {
+                        x,
+                        y: (g.top + g.mh / 2) as f32,
+                        age,
+                        life: 2.0,
+                    });
+                }
+            }
+            Key::Play => {
+                app.bump(k, PLAY_LEN);
+                app.dart_from = (app.dog_play_dx(), 0.0);
+                app.dart_s = 0.0;
+                let lim = (app.w as f32 / 2.0 - g.maxw * 1.3).max(0.0);
+                let side = if app.rng.random_bool(0.5) { 1.0 } else { -1.0 };
+                app.dog.ball_dx = side * lim * app.rng.random_range(0.6..=1.0);
+                app.dog.face = side;
+                app.dog.bark_t = 0.6;
+                app.play.dur = app.play.dur.max(app.play.st + PLAY_LEN);
+            }
+        }
+    }
+    fn on_ruffle(&self, app: &mut App, _col: u16, _row: u16) {
+        app.set_msg("Brrrr!");
+    }
+    fn foods(&self, app: &App) -> Vec<(f32, f32)> {
+        if !app.feed.on {
+            return vec![];
+        }
+        let body = app.dog_host_body();
+        let mouth = crate::dog_art::mouth_pos(app, &body);
+        let g = app.geo();
+        let feet = (g.top + g.mh + g.hh + g.al) as f32;
+        let x = g.cx as f32 + app.offset().0;
+        app.fish
+            .iter()
+            .filter_map(|f| {
+                let a = app.fish_age(f);
+                if !(0.0..=2.4).contains(&a) {
+                    return None;
+                }
+                let start = (f.from.0, feet - g.maxw * 0.9);
+                let land = f.from.1 == TOSS_LAND;
+                let (end_t, carry_t) = if land { (0.9, 1.4) } else { (1.1, 1.1) };
+                if land {
+                    let side = (f.from.0 - x).signum();
+                    let mut hb = body.clone();
+                    hb.dpose.head_down = 1.0;
+                    hb.dpose.look_up = 0.0;
+                    hb.dpose.spin = side;
+                    let gp = crate::dog_art::mouth_pos(app, &hb);
+                    let ground = (gp.0, feet);
+                    if a < end_t {
+                        let u = a / end_t;
+                        Some((
+                            start.0 + (ground.0 - start.0) * u,
+                            start.1 + (ground.1 - start.1) * u - 8.0 * 4.0 * u * (1.0 - u),
+                        ))
+                    } else if a < carry_t {
+                        Some(ground)
+                    } else {
+                        Some(mouth)
+                    }
+                } else if a < end_t {
+                    let u = a / end_t;
+                    Some((
+                        start.0 + (mouth.0 - start.0) * u,
+                        start.1 + (mouth.1 - start.1) * u - 8.0 * 4.0 * u * (1.0 - u),
+                    ))
+                } else {
+                    Some(mouth)
+                }
+            })
+            .collect()
+    }
+    fn arrive_msg(&self, breed: u8) -> Msg {
+        Msg::ArriveDog(breed)
+    }
+    fn throws(&self) -> Throw {
+        Throw::Bark
+    }
+    fn on_mouse(&self, app: &mut App, dir: f32) {
+        // chase the toy mouse across the yard
+        app.dog.chase = (dir, CHASE_T);
+        app.set_msg("Woof woof!");
+    }
+    fn on_ink(&self, app: &mut App, ox: f32) {
+        // inked: a splat on the coat, shaken off
+        app.splat = Some((2.0, ox));
+        app.note = Some(("Pfft!".to_string(), 2.0));
+    }
+    fn on_bark(&self, app: &mut App) {
+        // another dog barks: tilt the head and bark back
+        app.touch.boop = BOOP;
+        app.dog.bark_t = 0.6;
+    }
+    fn offset(&self, app: &App) -> (f32, f32) {
+        let jolt = if app.jolt > 0.0 {
+            -(app.jolt / 0.4).min(1.0)
+        } else {
+            0.0
+        };
+        (app.dog_dx(), jolt + app.fx.dy)
+    }
+    fn host_body(&self, app: &App) -> Body {
+        app.dog_host_body()
+    }
+    fn guest_body(&self, app: &App, g: &Guest) -> Body {
+        let cx = app.geo().cx;
+        let tt = app.t + g.t0;
+        let running = g.startle > 0.0;
+        let dir = if g.side < 0.0 { 1.0 } else { -1.0 };
+        let face = if running { -g.startle_dir } else { dir };
+        let face = if face == 0.0 { dir } else { face };
+        let shake: f32 = g
+            .splat
+            .map_or(0.0, |(l, _)| if l < 1.4 { 0.8 } else { 0.0 });
+        let barked = g.bark > 0.0;
+        Body {
+            kind: Kind::Dog,
+            breed: g.color,
+            breed_from: g.color,
+            bfade: 1.0,
+            boop: (g.touch.boop / BOOP).clamp(0.0, 1.0),
+            head_dy: g.touch.dy(),
+            dir: g.touch.dir,
+            dpose: DogPose {
+                walking: false,
+                running,
+                step: tt * 20.0,
+                wag: if g.touch.stroke > 0.0 || (tt % 7.0) < 1.5 {
+                    0.8
+                } else {
+                    0.0
+                },
+                wag_ph: tt * 14.0,
+                fast_ph: tt * 30.0,
+                shake: shake.max(g.touch.ruffle_k()),
+                tilt: if barked {
+                    0.8
+                } else {
+                    (g.touch.boop / BOOP).clamp(0.0, 1.0) * 0.8
+                },
+                spin: face,
+                tongue: running as u8 as f32,
+                open: if running { 0.5 } else { 0.0 },
+                ..Default::default()
+            },
+            splat: g.splat,
+            cx,
+            dx: g.x - cx as f32 + g.fx.dx,
+            dy: g.fx.dy,
+            scale: app.scale,
+            blush: (g.touch.stroke / 0.5).min(1.0),
+            bright: g.fx.bright,
+            dark: g.fx.dark,
+            closed: g.touch.stroke > 0.0,
+            blink: tt % 5.0 < 0.15,
+            food_x: g.x,
+            t: tt,
+            touch: ease(g.touch.touch),
+            touch_at: g.touch.at,
+            ruffle: g.touch.ruffle_k(),
+            ruffle_at: g.touch.ruffle_at,
+            tag: (g.tag > 0.0).then_some("guest"),
+            ..Body::default()
+        }
+    }
+    fn draw_scene(&self, cv: &mut Canvas, app: &App) {
+        crate::dog_art::draw_yard(cv, app);
+    }
+    fn draw_body(&self, cv: &mut Canvas, body: &Body, app: &App, id: u8) {
+        crate::dog_art::draw_dog_into(cv, body, app.mono, id, app.w, app.h);
+    }
+    fn draw_fx(&self, cv: &mut Canvas, app: &App) {
+        crate::dog_art::draw_props(cv, app);
+    }
+    fn treat_glyph(&self) -> &'static str {
+        "(o)"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pet;
+
+    pub fn dog(w: u16, h: u16, seed: u64) -> App {
+        let mut a = App::new(w, h, seed);
+        a.init_dog();
+        a.init_color(0, false);
+        a
+    }
+
+    #[test]
+    fn eight_breeds_in_order_and_parse() {
+        let names: Vec<_> = BREEDS.iter().map(|b| b.name).collect();
+        assert_eq!(
+            names,
+            [
+                "golden",
+                "lab",
+                "husky",
+                "corgi",
+                "dalmatian",
+                "beagle",
+                "poodle",
+                "german shepherd"
+            ]
+        );
+        assert_eq!(pet::parse_breed(&DOG, "Corgi"), Some(Ok(3)));
+        assert_eq!(pet::parse_breed(&DOG, "random"), Some(Err(())));
+        assert_eq!(pet::parse_breed(&DOG, "sphinx"), None);
+        assert!(pet::breed_list(&DOG).starts_with("golden, lab, husky"));
+        assert_eq!(pet::random_breed(&DOG, 7), pet::random_breed(&DOG, 7));
+    }
+
+    #[test]
+    fn c_cycles_through_all_eight_with_a_message() {
+        let mut a = dog(120, 40, 1);
+        a.next_color();
+        assert_eq!(a.cmsg.as_ref().unwrap().0, "I'm a lab today!");
+        a.next_color();
+        a.next_color();
+        assert_eq!(a.cmsg.as_ref().unwrap().0, "I'm a corgi today!");
+        for _ in 0..5 {
+            a.next_color();
+        }
+        assert_eq!(a.color_idx(), 0);
+    }
+
+    #[test]
+    fn corgi_has_short_legs() {
+        assert!(BREEDS[3].leg < 0.6 * BREEDS[0].leg);
+        let pals: std::collections::HashSet<_> = BREEDS.iter().map(|b| (b.coat, b.dark)).collect();
+        assert_eq!(pals.len(), 8);
+    }
+
+    #[test]
+    fn keys_produce_their_sequences_and_layer() {
+        let mut a = dog(120, 40, 1);
+        assert!(a.press(Key::Feed));
+        assert_eq!(a.msg, Some("Crunch!"));
+        assert_eq!(a.fish.len(), 1);
+        assert_eq!(a.foods().len(), 1);
+        assert!(a.press(Key::Pet));
+        assert!(a.pet.on && !a.hearts.is_empty());
+        assert!(a.press(Key::Play));
+        assert!(a.play.on && a.feed.on && a.pet.on);
+        // repeated presses add biscuits
+        a.press(Key::Feed);
+        assert_eq!(a.fish.len(), 2);
+        for _ in 0..(14 * 16) {
+            a.update(1.0 / 16.0);
+        }
+        assert!(!a.any_react());
+        assert!(a.ball_pos().is_none());
+    }
+
+    #[test]
+    fn biscuit_is_caught_or_picked_off_the_grass() {
+        for flip in 0..2 {
+            let mut a = dog(120, 40, 1);
+            a.dog.toss_flip = flip == 1;
+            a.press(Key::Feed);
+            let mut carried = false;
+            for _ in 0..(2 * 16) {
+                a.update(1.0 / 16.0);
+                carried |= a.dog_pose().carry == 1;
+            }
+            assert!(carried, "flip {flip}");
+        }
+    }
+
+    #[test]
+    fn nap_goes_into_the_doghouse() {
+        let mut a = dog(120, 40, 1);
+        a.state = State::IdleBehavior(Behavior::Nap);
+        a.st = 0.0;
+        let door = crate::dog_art::door_x(120, 40);
+        for i in 0..60 {
+            a.update(1.0 / 16.0);
+            let _ = i;
+        }
+        assert!(a.dog.nap_k >= 1.0);
+        assert!((a.geo().cx as f32 + a.offset().0 - door).abs() < 1.0);
+        assert!(a.dog_pose().inside);
+    }
+
+    /// Dev helper: `SNAP_DIR=/tmp/x cargo test snap_poses` writes ANSI frames of each idle pose.
+    #[test]
+    fn snap_poses() {
+        let Ok(dir) = std::env::var("SNAP_DIR") else {
+            return;
+        };
+        let ansi = |a: &App, name: &str| {
+            let cv = crate::art::render(a, false);
+            let mut out = String::new();
+            for y in 0..cv.h {
+                for x in 0..cv.w {
+                    let c = cv.cells[y * cv.w + x];
+                    match c.fg {
+                        Some((r, g, b)) => out.push_str(&format!("\x1b[38;2;{r};{g};{b}m{}", c.ch)),
+                        None => out.push_str(&format!("\x1b[0m{}", c.ch)),
+                    }
+                }
+                out.push_str("\x1b[0m\n");
+            }
+            std::fs::write(format!("{dir}/{name}.ans"), out).unwrap();
+        };
+        for (n, b, secs) in [
+            ("nap", Behavior::Nap, 4.0),
+            ("dig", Behavior::Dig, 2.0),
+            ("sniff", Behavior::Sniff, 1.5),
+            ("ear", Behavior::EarScratch, 1.1),
+            ("spin", Behavior::TailSpin, 1.2),
+            ("bark", Behavior::Bark, 0.6),
+        ] {
+            let mut a = dog(120, 40, 11);
+            a.state = State::IdleBehavior(b);
+            a.st = 0.0;
+            a.dog_start_idle(b);
+            for _ in 0..(secs * 16.0) as usize {
+                a.update(1.0 / 16.0);
+            }
+            ansi(&a, n);
+        }
+    }
+
+    use crate::link::Msg;
+
+    fn hello(a: &mut App, from: u32, away: bool) {
+        a.on_msg(from, Msg::Hello { away, accept: true });
+    }
+
+    #[test]
+    fn dog_space_with_neighbor_sends_bark_not_ink() {
+        let mut a = dog(120, 40, 1);
+        a.enable_social(1);
+        hello(&mut a, 2, false);
+        let mut barks = 0;
+        for _ in 0..30 {
+            a.press(Key::Play);
+            for _ in 0..3 {
+                a.update(0.0625);
+                hello(&mut a, 2, false);
+            }
+            for (_, m) in a.outbox.drain(..) {
+                assert!(!matches!(m, Msg::Ink | Msg::Mouse));
+                barks += (m == Msg::Bark) as u32;
+            }
+        }
+        assert!((1..=3).contains(&barks), "barks {barks}");
+    }
+
+    #[test]
+    fn cat_arches_at_bark() {
+        let mut c = App::new(120, 40, 1);
+        c.init_cat();
+        c.init_color(0, false);
+        c.enable_social(1);
+        c.on_msg(2, Msg::Bark);
+        let mut seen = false;
+        for _ in 0..60 {
+            c.update(0.0625);
+            seen |= c.note.as_ref().is_some_and(|n| n.0 == "Hsss!");
+        }
+        assert!(seen);
+    }
+
+    #[test]
+    fn squid_jets_off_at_bark_and_returns() {
+        let mut s = App::new(120, 40, 2);
+        s.enable_social(2);
+        s.on_msg(1, Msg::Bark);
+        let mut far = 0.0f32;
+        for _ in 0..200 {
+            s.update(0.0625);
+            far = far.max(s.offset().0.abs());
+        }
+        assert!(far > 10.0, "far {far}");
+        assert!(s.scare == 0.0);
+    }
+
+    #[test]
+    fn dog_chases_mouse_and_shakes_off_ink() {
+        let mut a = dog(120, 40, 1);
+        a.enable_social(1);
+        a.on_msg(2, Msg::Mouse);
+        let mut chased = false;
+        for _ in 0..80 {
+            a.update(0.0625);
+            chased |= a.dog.chase.1 > 0.0;
+        }
+        assert!(chased);
+        a.on_msg(2, Msg::Ink);
+        let (mut splat, mut shake, mut gone) = (false, false, false);
+        for _ in 0..120 {
+            a.update(0.0625);
+            let had = splat;
+            splat |= a.splat.is_some();
+            shake |= a.dog_pose().shake > 0.0;
+            gone |= had && a.splat.is_none();
+        }
+        assert!(splat && shake && gone, "{splat} {shake} {gone}");
+    }
+
+    #[test]
+    fn dog_guest_arrives_by_wire() {
+        let mut h = App::new(120, 40, 1);
+        h.enable_social(1);
+        h.on_msg(2, Msg::ArriveDog(3));
+        assert!(h.guests.iter().any(|g| g.kind == Kind::Dog));
+    }
+}

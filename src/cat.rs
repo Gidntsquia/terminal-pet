@@ -1,8 +1,12 @@
 //! The cat: breeds, per-cat animation state and the `App` methods that drive it.
 //! Drawing lives in `cat_art`. Everything here only runs when `App::kind` is `Cat`.
-use super::{App, BURST, Behavior, Key, State, ease};
-use crate::art::Body;
+//! `CatPet` implements the shared `Pet` trait and routes the engine to the methods below.
+use super::{App, BURST, Behavior, Heart, Key, Kind, State, ease};
 use crate::art::Rgb;
+use crate::art::{Body, Canvas, Geo};
+use crate::link::Msg;
+use crate::pet::{Pet, Throw};
+use crate::social::Guest;
 use rand::Rng;
 use rand::seq::SliceRandom;
 
@@ -217,6 +221,8 @@ pub struct CatState {
     /// Laser waypoints (fractions of the window) and zoomie targets (cells from center).
     pub way: [(f32, f32); 5],
     pub dashes: [f32; 4],
+    /// Seconds left of the arch-and-puff after a bark.
+    pub bark_t: f32,
 }
 
 /// Everything about the cat's pose that is not already in `Body`.
@@ -337,6 +343,7 @@ impl App {
             self.cat.ear_side = if self.rng.random_bool(0.5) { 1.0 } else { -1.0 };
             self.cat.next_ear = t + self.rng.random_range(4.0..9.0);
         }
+        self.cat.bark_t = (self.cat.bark_t - dt).max(0.0);
         if self.cat.tail_t > 0.0 {
             self.cat.tail_t -= dt;
         } else if t >= self.cat.next_tail {
@@ -457,6 +464,9 @@ impl App {
         if self.cat.tail_t > 0.0 {
             p.tail_tw = (t * 30.0).sin();
         }
+        if self.cat.bark_t > 0.0 {
+            p.puffy = true;
+        }
         // treat: watch it fall, bat it, eat it
         if self.feed.on
             && let Some(f) = self.fish.last()
@@ -532,8 +542,9 @@ impl App {
             head_dy: self.touch.dy(),
             dir: self.touch.dir,
             tail: self.touch.tail_side(),
-            bang: false,
+            bang: self.cat.bark_t > 0.0,
             splat: self.splat,
+            ..Body::default()
         }
     }
 
@@ -543,6 +554,207 @@ impl App {
             Key::Pet => "Purrrr \u{2665}",
             Key::Play => "Wheee!",
         }
+    }
+}
+
+pub struct CatPet;
+pub static CAT: CatPet = CatPet;
+
+impl Pet for CatPet {
+    fn kind(&self) -> Kind {
+        Kind::Cat
+    }
+    fn name(&self) -> &'static str {
+        "cat"
+    }
+    fn breeds(&self) -> Vec<&'static str> {
+        BREEDS.iter().map(|b| b.name).collect()
+    }
+    fn init(&self, app: &mut App) {
+        app.init_cat();
+    }
+    fn geo(&self, w: u16, h: u16, scale: f32) -> Geo {
+        crate::cat_art::geo_cat(w, h, scale)
+    }
+    fn pick_idle(&self, app: &mut App) -> Behavior {
+        app.cat_pick_idle()
+    }
+    fn start_idle(&self, app: &mut App, b: Behavior) {
+        if b == Behavior::InkPuff {
+            app.cat_sneeze();
+        }
+    }
+    fn update(&self, app: &mut App, dt: f32) {
+        app.cat_motes(dt);
+        app.cat_update(dt);
+    }
+    fn msg_for(&self, k: Key) -> &'static str {
+        App::cat_msg(k)
+    }
+    fn boop_msg(&self) -> &'static str {
+        "Mrrp?"
+    }
+    fn mote_chars(&self) -> [char; 3] {
+        ['.', '*', '\u{b0}']
+    }
+    fn stream_char(&self) -> char {
+        '*'
+    }
+    fn hints(&self, social: bool) -> &'static str {
+        if social {
+            "[f] treat   [p] pet   [space] laser   [v] visit   [c] breed   [q] quit"
+        } else {
+            "[f] treat   [p] pet   [space] laser   [c] breed   [q] quit"
+        }
+    }
+    fn on_press(&self, app: &mut App, k: Key) {
+        let g = app.geo();
+        match k {
+            Key::Feed => {
+                let from = (app.mouth_x(), -1.0);
+                app.add_fish(from);
+            }
+            Key::Pet => {
+                app.bump(k, 0.0);
+                let n = app.rng.random_range(3..=5);
+                for _ in 0..n {
+                    let x = app.spawn_x() + app.rng.random_range(-g.hwh..=g.hwh);
+                    let age = -app.rng.random_range(0.0..0.6);
+                    app.hearts.push(Heart {
+                        x,
+                        y: (g.top + g.mh / 2) as f32,
+                        age,
+                        life: 2.0,
+                    });
+                }
+            }
+            Key::Play => {
+                app.bump(k, PLAY_LEN);
+                app.cat_play_start();
+            }
+        }
+    }
+    fn on_ruffle(&self, app: &mut App, _col: u16, _row: u16) {
+        app.set_msg("Mrow~");
+    }
+    fn arrive_msg(&self, breed: u8) -> Msg {
+        Msg::ArriveCat(breed)
+    }
+    fn throws(&self) -> Throw {
+        Throw::Mouse
+    }
+    fn on_mouse(&self, _app: &mut App, _dir: f32) {}
+    fn on_ink(&self, app: &mut App, ox: f32) {
+        // inked: dark splat on the fur, sneeze, shake it off
+        app.splat = Some((2.0, ox));
+        app.state = State::IdleBehavior(Behavior::InkPuff);
+        app.st = 0.0;
+        app.cat_sneeze();
+        app.note = Some(("Pfft!".to_string(), 2.0));
+    }
+    fn on_bark(&self, app: &mut App) {
+        // arch up and puff the tail
+        app.cat.bark_t = crate::social::BARK_T;
+        app.jolt = 0.4;
+        app.note = Some(("Hsss!".to_string(), 2.0));
+    }
+    fn offset(&self, app: &App) -> (f32, f32) {
+        let jolt = if app.jolt > 0.0 {
+            -(app.jolt / 0.4).min(1.0)
+        } else {
+            0.0
+        };
+        (
+            app.cat_dx() + app.wander() + app.host_dx + app.home_ox() + app.fx.dx,
+            jolt + app.fx.dy,
+        )
+    }
+    fn host_body(&self, app: &App) -> Body {
+        app.cat_host_body()
+    }
+    fn guest_body(&self, app: &App, g: &Guest) -> Body {
+        let cx = app.geo().cx;
+        let tt = app.t + g.t0;
+        let barked = g.bark > 0.0;
+        Body {
+            kind: Kind::Cat,
+            breed: g.color,
+            breed_from: g.color,
+            bfade: 1.0,
+            boop: (g.touch.boop / super::BOOP).clamp(0.0, 1.0),
+            head_dy: g.touch.dy(),
+            dir: g.touch.dir,
+            tail: g.touch.tail_side(),
+            pose: CatPose {
+                tail_tw: if (tt % 6.0) < 0.5 {
+                    (tt * 30.0).sin()
+                } else {
+                    0.0
+                },
+                sneeze: g
+                    .splat
+                    .map_or(0.0, |(l, _)| crate::social::sin_pulse(1.7 - l, 0.45)),
+                wiggle: g.splat.map_or(0.0, |(l, _)| {
+                    if l < 1.4 {
+                        (tt * 40.0).sin() * l / 1.4
+                    } else {
+                        0.0
+                    }
+                }),
+                puffy: barked,
+                ..Default::default()
+            },
+            splat: g.splat,
+            cx,
+            dx: g.x - cx as f32 + g.fx.dx,
+            dy: g.fx.dy
+                - 1.2
+                    * crate::social::sin_pulse(crate::social::BARK_T - g.bark, 0.4)
+                    * barked as u8 as f32,
+            scale: app.scale,
+            blush: (g.touch.stroke / 0.5).min(1.0),
+            bright: g.fx.bright,
+            dark: g.fx.dark,
+            closed: g.touch.stroke > 0.0,
+            blink: tt % 5.0 < 0.15,
+            lean: 0.25 * g.touch.lean(),
+            food_x: g.x,
+            t: tt,
+            touch: ease(g.touch.touch),
+            touch_at: g.touch.at,
+            ruffle: g.touch.ruffle_k(),
+            ruffle_at: g.touch.ruffle_at,
+            tag: (g.tag > 0.0).then_some("guest"),
+            bang: barked,
+            ..Body::default()
+        }
+    }
+    fn draw_scene(&self, cv: &mut Canvas, app: &App) {
+        crate::cat_art::draw_room(cv, app);
+    }
+    fn draw_body(&self, cv: &mut Canvas, body: &Body, app: &App, id: u8) {
+        crate::cat_art::draw_cat_into(cv, body, app.mono, id, app.w, app.h);
+    }
+    fn draw_fx(&self, cv: &mut Canvas, app: &App) {
+        for (fx, fy) in app.foods() {
+            cv.text(
+                fx.round() as i32 - 1,
+                fy.round() as i32,
+                "(o)",
+                (0xE0, 0xA0, 0x50),
+            );
+        }
+        if let Some((lx, ly)) = app.laser_pos() {
+            cv.put(
+                lx.round() as i32,
+                ly.round() as i32,
+                '\u{25cf}',
+                (0xFF, 0x20, 0x20),
+            );
+        }
+    }
+    fn treat_glyph(&self) -> &'static str {
+        "(o)"
     }
 }
 

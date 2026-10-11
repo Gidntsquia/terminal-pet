@@ -1,9 +1,11 @@
 pub mod app;
 pub mod art;
 pub mod cat_art;
+pub mod dog_art;
 pub mod link;
+pub mod pet;
 pub mod social;
-pub use app::cat;
+pub use app::{cat, dog};
 
 use app::{App, ColorChoice, Key, Kind, Ptr, color_list, parse_color, random_preset};
 use crossterm::cursor::{Hide, Show};
@@ -77,16 +79,14 @@ pub fn cli() -> io::Result<()> {
             color = Some(v);
             continue;
         }
-        if let Some(v) = value(&mut args, &a, "--breed", cat::breed_list()) {
+        if let Some(v) = value(&mut args, &a, "--breed", all_breeds()) {
             breed = Some(v);
             continue;
         }
-        if let Some(v) = value(&mut args, &a, "--pet", "squid, cat".into()) {
-            pet = Some(match v.to_ascii_lowercase().as_str() {
-                "squid" => Kind::Squid,
-                "cat" => Kind::Cat,
-                _ => fail(format!("unknown pet '{v}' (choose from: squid, cat)")),
-            });
+        if let Some(v) = value(&mut args, &a, "--pet", pet_names()) {
+            pet = Some(parse_pet(&v).unwrap_or_else(|| {
+                fail(format!("unknown pet '{v}' (choose from: {})", pet_names()))
+            }));
             continue;
         }
         match a.as_str() {
@@ -104,10 +104,10 @@ pub fn cli() -> io::Result<()> {
     let pet = pet.unwrap_or(Kind::Squid);
     let mut choice = ColorChoice::Preset(0);
     let mut bchoice: Result<usize, ()> = Ok(0);
-    match pet {
-        Kind::Squid => {
+    match pet.pet() {
+        None => {
             if breed.is_some() {
-                fail("--breed only applies to --pet cat (use --color for the squid)".into());
+                fail("--breed only applies to --pet cat or dog (use --color for the squid)".into());
             }
             if let Some(v) = &color {
                 choice = parse_color(v).unwrap_or_else(|| {
@@ -118,22 +118,17 @@ pub fn cli() -> io::Result<()> {
                 });
             }
         }
-        Kind::Cat => {
+        Some(p) => {
+            let list = pet::breed_list(p);
             if color.is_some() {
-                fail(
-                    "--color only applies to the squid (use --breed for the cat; choose from: "
-                        .to_string()
-                        + &cat::breed_list()
-                        + ")",
-                );
+                fail(format!(
+                    "--color only applies to the squid (use --breed for the {}; choose from: {list})",
+                    p.name()
+                ));
             }
             if let Some(v) = &breed {
-                bchoice = cat::parse_breed(v).unwrap_or_else(|| {
-                    fail(format!(
-                        "unknown breed '{v}' (choose from: {})",
-                        cat::breed_list()
-                    ))
-                });
+                bchoice = pet::parse_breed(p, v)
+                    .unwrap_or_else(|| fail(format!("unknown breed '{v}' (choose from: {list})")));
             }
         }
     }
@@ -195,11 +190,12 @@ fn run(
     let size = term.size()?;
     let mut app = App::new(size.width, size.height, seed);
     app.mono = mode == Mode::Mono;
-    if pet == Kind::Cat {
-        app.init_cat();
+    if let Some(p) = pet.pet() {
+        app.kind = pet;
+        p.init(&mut app);
         match bchoice {
             Ok(i) => app.init_color(i, false),
-            Err(()) => app.init_color(cat::random_breed(seed), true),
+            Err(()) => app.init_color(pet::random_breed(p, seed), true),
         }
     } else {
         match choice {
@@ -227,7 +223,7 @@ fn run(
                             app.quit = true
                         }
                         KeyCode::Char('c') | KeyCode::Char('C') => {
-                            if (!app.mono || app.is_cat()) && !app.is_away() {
+                            if (!app.mono || app.pet().is_some()) && !app.is_away() {
                                 app.next_color();
                                 force = true
                             }
@@ -327,10 +323,48 @@ fn run(
     Ok(())
 }
 
+/// `squid, cat, dog`: the names `--pet` accepts.
+fn pet_names() -> String {
+    let mut v = vec!["squid"];
+    v.extend(Kind::ALL.iter().filter_map(|k| k.pet()).map(|p| p.name()));
+    v.join(", ")
+}
+
+fn parse_pet(s: &str) -> Option<Kind> {
+    let s = s.to_ascii_lowercase();
+    if s == "squid" {
+        return Some(Kind::Squid);
+    }
+    Kind::ALL
+        .iter()
+        .copied()
+        .find(|k| k.pet().is_some_and(|p| p.name() == s))
+}
+
+/// Every pet's breeds, for the `--breed` missing-value message.
+fn all_breeds() -> String {
+    Kind::ALL
+        .iter()
+        .filter_map(|k| k.pet())
+        .map(|p| format!("{}: {}", p.name(), pet::breed_list(p)))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn breeds_of(name: &str) -> String {
+    Kind::ALL
+        .iter()
+        .filter_map(|k| k.pet())
+        .find(|p| p.name() == name)
+        .map(pet::breed_list)
+        .unwrap_or_default()
+}
+
 fn help(prog: &str) -> String {
     format!(
-        "{prog} - a giant ASCII pet for your terminal: a squid or a cat\n\nUSAGE: {prog} [--pet squid|cat] [--ascii] [--solo] [--no-mouse] [--seed N] [--color NAME | --breed NAME]\n\n  --pet KIND    which pet: squid (default) or cat\n  --color NAME  squid color: {}\n  --breed NAME  cat breed: {}\n  --solo        don't look for other pets in other terminals\n  --no-mouse    don't capture the mouse (keeps terminal text selection)\n\nKeys: f feed (squid) / treat (cat), p pet, space play (squid) / laser dot (cat), c color / breed, v visit a neighbor (or call your guest/visitor home), q/Esc quit\nMouse: click = boop, drag across the pet = stroke, scroll wheel over it = ruffle\n\nPets in other terminals on this machine find each other automatically (a cat and a squid can visit each other): they\nvisit (on their own every 20-30 minutes, with a 10 minute pause after a visit; or press v any time) and share treats, fish, motes, bubbles, ink and pounces. Repeated f/p/space presses stack up. Use --solo to stay on your own.",
+        "{prog} - a giant ASCII pet for your terminal: a squid, a cat or a dog\n\nUSAGE: {prog} [--pet squid|cat|dog] [--ascii] [--solo] [--no-mouse] [--seed N] [--color NAME | --breed NAME]\n\n  --pet KIND    which pet: squid (default), cat or dog\n  --color NAME  squid color: {}\n  --breed NAME  cat breed: {}\n                dog breed: {}\n  --solo        don't look for other pets in other terminals\n  --no-mouse    don't capture the mouse (keeps terminal text selection)\n\nKeys: f feed (squid) / treat (cat) / biscuit (dog), p pet, space play (squid) / laser dot (cat) / ball and bark (dog), c color / breed, v visit a neighbor (or call your guest/visitor home), q/Esc quit\nMouse: click = boop, drag across the pet = stroke / scratch, scroll wheel over it = ruffle / shake-off\n\nPets in other terminals on this machine find each other automatically (squid, cat and dog can all visit each other): they\nvisit (on their own every 20-30 minutes, with a 10 minute pause after a visit; or press v any time) and share treats, fish, motes, bubbles, ink, pounces and barks. Repeated f/p/space presses stack up. Use --solo to stay on your own.",
         color_list(),
-        cat::breed_list()
+        breeds_of("cat"),
+        breeds_of("dog")
     )
 }

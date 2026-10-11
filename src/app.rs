@@ -2,6 +2,8 @@
 use crate::art::{Body, PRESETS, Palette, geo_s, lerp_pal};
 #[path = "cat.rs"]
 pub mod cat;
+#[path = "dog.rs"]
+pub mod dog;
 use crate::link::Msg;
 use crate::social::{Fx, Guest, Home, In, Peer};
 use rand::rngs::StdRng;
@@ -17,6 +19,13 @@ pub enum Behavior {
     Stretch,
     Groom,
     SlowBlink,
+    // dog idles
+    Sniff,
+    Dig,
+    Nap,
+    EarScratch,
+    TailSpin,
+    Bark,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -24,6 +33,7 @@ pub enum Kind {
     #[default]
     Squid,
     Cat,
+    Dog,
 }
 
 /// Idle-time state. Key reactions are layered separately (`React`).
@@ -46,10 +56,9 @@ impl Key {
         self as usize
     }
     pub fn msg_for(self, kind: Kind) -> &'static str {
-        if kind == Kind::Cat {
-            App::cat_msg(self)
-        } else {
-            self.msg()
+        match kind.pet() {
+            Some(p) => p.msg_for(self),
+            None => self.msg(),
         }
     }
     pub fn base(self) -> f32 {
@@ -267,6 +276,7 @@ pub struct App {
     pub note: Option<(String, f32)>,
     pub kind: Kind,
     pub cat: cat::CatState,
+    pub dog: dog::DogState,
     pub breed_from: usize,
     color: usize,
     pal_from: Palette,
@@ -295,6 +305,8 @@ pub struct App {
     pub startle_dir: f32,
     /// Ink splat on a cat's fur: (seconds left, x offset from cat centre).
     pub splat: Option<(f32, f32)>,
+    /// Seconds left of a squid jetting away from a bark.
+    pub scare: f32,
     pub next_idle: f32,
     pub next_blink: f32,
     pub quit: bool,
@@ -348,6 +360,7 @@ impl App {
             note: None,
             kind: Kind::Squid,
             cat: cat::CatState::default(),
+            dog: dog::DogState::default(),
             breed_from: 0,
             color: 0,
             pal_from: PRESETS[0].1,
@@ -374,6 +387,7 @@ impl App {
             startle: 0.0,
             startle_dir: 0.0,
             splat: None,
+            scare: 0.0,
             next_idle,
             next_blink,
             quit: false,
@@ -407,11 +421,16 @@ impl App {
         }
     }
 
+    /// The pet trait object for this process; `None` for the squid.
+    pub fn pet(&self) -> Option<&'static dyn crate::pet::Pet> {
+        self.kind.pet()
+    }
+
     pub fn geo(&self) -> crate::art::Geo {
-        if self.kind == Kind::Cat {
-            return crate::cat_art::geo_cat(self.w, self.h, self.scale);
+        match self.pet() {
+            Some(p) => p.geo(self.w, self.h, self.scale),
+            None => geo_s(self.w, self.h, self.scale),
         }
-        geo_s(self.w, self.h, self.scale)
     }
 
     /// Set the starting preset; `announce` shows "I'm <name> today!".
@@ -427,9 +446,9 @@ impl App {
 
     /// Fade to the next preset (the `c` key).
     pub fn next_color(&mut self) {
-        if self.kind == Kind::Cat {
+        if let Some(p) = self.pet() {
             self.breed_from = self.color;
-            self.color = (self.color + 1) % cat::BREEDS.len();
+            self.color = (self.color + 1) % p.breeds().len();
             self.fade = 0.0;
             self.cmsg = Some((format!("I'm a {} today!", self.kind_name(self.color)), 2.0));
             if let Home::Away { host, .. } = self.home {
@@ -447,10 +466,9 @@ impl App {
     }
 
     fn kind_name(&self, i: usize) -> &'static str {
-        if self.kind == Kind::Cat {
-            cat::BREEDS[i].name
-        } else {
-            PRESETS[i].0
+        match self.pet() {
+            Some(p) => p.breeds()[i],
+            None => PRESETS[i].0,
         }
     }
 
@@ -460,7 +478,7 @@ impl App {
     }
 
     pub fn palette(&self) -> Palette {
-        if self.kind == Kind::Cat {
+        if self.pet().is_some() {
             return PRESETS[0].1;
         }
         if self.fade >= 1.0 {
@@ -656,11 +674,7 @@ impl App {
                 {
                     self.touch_of(w).boop = BOOP;
                     self.add_heart(col, row);
-                    self.set_msg(if self.kind == Kind::Cat {
-                        "Mrrp?"
-                    } else {
-                        "Boop!"
-                    });
+                    self.set_msg(self.pet().map_or("Boop!", |p| p.boop_msg()));
                 }
             }
             Ptr::Scroll => {
@@ -673,8 +687,8 @@ impl App {
                 let t = self.touch_of(w);
                 t.ruffle = (t.ruffle + RUFFLE_NOTCH).min(3.0 * RUFFLE_NOTCH);
                 t.ruffle_at = (col as f32, row as f32);
-                if self.kind == Kind::Cat {
-                    self.set_msg("Mrow~");
+                if let Some(p) = self.pet() {
+                    p.on_ruffle(self, col, row);
                     return;
                 }
                 self.set_msg("Hehe~");
@@ -731,25 +745,24 @@ impl App {
         }
         self.msg = Some(k.msg_for(self.kind));
         self.state = State::Idle;
+        if let Some(p) = self.pet() {
+            p.on_press(self, k);
+        } else {
+            self.squid_press(k);
+        }
+        if self.social {
+            self.after_press(k);
+        }
+        true
+    }
+
+    /// The squid's own key reactions (not routed through the `Pet` trait).
+    fn squid_press(&mut self, k: Key) {
         let g = self.geo();
         match k {
             Key::Feed => {
                 let from = (self.mouth_x(), -1.0);
                 self.add_fish(from);
-            }
-            Key::Pet if self.kind == Kind::Cat => {
-                self.bump(k, 0.0);
-                let n = self.rng.random_range(3..=5);
-                for _ in 0..n {
-                    let x = self.spawn_x() + self.rng.random_range(-g.hwh..=g.hwh);
-                    let age = -self.rng.random_range(0.0..0.6);
-                    self.hearts.push(Heart {
-                        x,
-                        y: (g.top + g.mh / 2) as f32,
-                        age,
-                        life: 2.0,
-                    });
-                }
             }
             Key::Pet => {
                 self.bump(k, 0.0);
@@ -766,10 +779,6 @@ impl App {
                     });
                 }
             }
-            Key::Play if self.kind == Kind::Cat => {
-                self.bump(k, cat::PLAY_LEN);
-                self.cat_play_start();
-            }
             Key::Play => {
                 self.bump(k, 3.4);
                 let (px, py) = self.dart_offset();
@@ -783,14 +792,10 @@ impl App {
                 self.spawn_ink(self.spawn_x(), (g.top + g.mh) as f32, 50, 1.0);
             }
         }
-        if self.social {
-            self.after_press(k);
-        }
-        true
     }
 
     /// Start the reaction, or extend a running one. `need` = minimum seconds left.
-    fn bump(&mut self, k: Key, need: f32) {
+    pub(crate) fn bump(&mut self, k: Key, need: f32) {
         let base = k.base();
         let r = self.react(k);
         if r.on {
@@ -851,8 +856,8 @@ impl App {
         self.state = State::IdleBehavior(b);
         self.st = 0.0;
         let g = self.geo();
-        if b == Behavior::InkPuff && self.kind == Kind::Cat {
-            self.cat_sneeze();
+        if let Some(p) = self.pet() {
+            p.start_idle(self, b);
         } else if b == Behavior::InkPuff {
             self.spawn_ink(self.spawn_x(), (g.top + g.mh) as f32, 14, 0.5)
         }
@@ -864,6 +869,12 @@ impl App {
             Behavior::Stretch => 2.6,
             Behavior::Groom => 3.0,
             Behavior::SlowBlink => 1.4,
+            Behavior::Sniff => 3.0,
+            Behavior::Dig => 4.0,
+            Behavior::Nap => 8.0,
+            Behavior::EarScratch => 2.2,
+            Behavior::TailSpin => 3.0,
+            Behavior::Bark => 1.8,
             _ => 1.8,
         }
     }
@@ -934,8 +945,8 @@ impl App {
             self.next_idle = self.t + self.rng.random_range(10.0..25.0);
         }
         if self.state == State::Idle && !self.any_react() && self.t >= self.next_idle {
-            let b = if self.kind == Kind::Cat {
-                self.cat_pick_idle()
+            let b = if let Some(p) = self.pet() {
+                p.pick_idle(self)
             } else {
                 match self.rng.random_range(0..4) {
                     0 => Behavior::Yawn,
@@ -951,9 +962,8 @@ impl App {
         }
         // bubbles
         let g = self.geo();
-        if self.kind == Kind::Cat {
-            self.cat_motes(dt);
-            self.cat_update(dt);
+        if let Some(p) = self.pet() {
+            p.update(self, dt);
         } else if self.bubbles.len() < 40 && self.rng.random_range(0.0..1.0) < 3.0 * dt {
             let x = self.spawn_x() + self.rng.random_range(-g.maxw * 1.4..=g.maxw * 1.4);
             self.bubbles.push(Bubble {
@@ -987,6 +997,7 @@ impl App {
         }
         self.ink.retain(|i| i.age < i.life);
         self.jolt = (self.jolt - dt).max(0.0);
+        self.scare = (self.scare - dt).max(0.0);
         self.startle = (self.startle - dt).max(0.0);
         if let Some((l, x)) = self.splat {
             self.splat = (l > dt).then_some((l - dt, x));
@@ -1012,7 +1023,7 @@ impl App {
         self.feed.st - f.born
     }
     pub fn puff(&self) -> f32 {
-        let sp = if self.startle > 0.0 && self.kind != Kind::Cat {
+        let sp = if self.startle > 0.0 && self.pet().is_none() {
             1.0 + 0.3 * (std::f32::consts::PI * (1.0 - self.startle / STARTLE_T)).sin()
         } else {
             1.0
@@ -1085,16 +1096,8 @@ impl App {
     }
     /// (dx, dy) in cells: play dart offset plus idle bob.
     pub fn offset(&self) -> (f32, f32) {
-        if self.kind == Kind::Cat {
-            let jolt = if self.jolt > 0.0 {
-                -(self.jolt / 0.4).min(1.0)
-            } else {
-                0.0
-            };
-            return (
-                self.cat_dx() + self.wander() + self.host_dx + self.home_ox() + self.fx.dx,
-                jolt + self.fx.dy,
-            );
+        if let Some(p) = self.pet() {
+            return p.offset(self);
         }
         let bob = 1.0 + 0.6 * (self.t * 0.35).sin();
         let (px, py) = self.dart_offset();
@@ -1109,9 +1112,30 @@ impl App {
             0.0
         };
         (
-            px + self.wander() + self.host_dx + self.home_ox() + self.fx.dx + jerk,
+            px + self.wander()
+                + self.host_dx
+                + self.home_ox()
+                + self.fx.dx
+                + jerk
+                + self.scare_dx(),
             bob + py + jolt + self.fx.dy + self.touch.dy(),
         )
+    }
+    /// Sideways offset while the squid jets off-screen and back after a bark.
+    fn scare_dx(&self) -> f32 {
+        if self.scare <= 0.0 {
+            return 0.0;
+        }
+        let u = 1.0 - self.scare / crate::social::SCARE_T;
+        let k = if u < 0.2 {
+            ease(u / 0.2)
+        } else if u < 0.6 {
+            1.0
+        } else {
+            1.0 - ease((u - 0.6) / 0.4)
+        };
+        let side = if self.pos >= 0.0 { 1.0 } else { -1.0 };
+        side * k * (self.w as f32 / 2.0 + 3.0 * self.geo().maxw + self.h as f32 * 0.5 + 4.0)
     }
     /// Horizontal offset in cells: rests, then drifts in a short burst.
     pub fn wander(&self) -> f32 {
@@ -1136,6 +1160,13 @@ impl App {
     }
     /// Food positions while feeding (one per fish still on screen).
     pub fn foods(&self) -> Vec<(f32, f32)> {
+        match self.pet() {
+            Some(p) => p.foods(self),
+            None => self.default_foods(),
+        }
+    }
+    /// Food on its way to the host's mouth (the shared fall-and-eat path).
+    pub fn default_foods(&self) -> Vec<(f32, f32)> {
         if !self.feed.on {
             return vec![];
         }
@@ -1159,8 +1190,8 @@ impl App {
     }
     /// Draw data for the host squid.
     pub fn host_body(&self) -> Body {
-        if self.kind == Kind::Cat {
-            return self.cat_host_body();
+        if let Some(p) = self.pet() {
+            return p.host_body(self);
         }
         let g = self.geo();
         let (dx, dy) = self.offset();

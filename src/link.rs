@@ -20,6 +20,8 @@ pub enum Msg {
     Arrive(u8),
     /// A cat guest arrives (breed index).
     ArriveCat(u8),
+    /// A dog guest arrives (breed index).
+    ArriveDog(u8),
     Color(u8),
     Recall,
     Home,
@@ -28,6 +30,8 @@ pub enum Msg {
     Ink,
     /// A cat's toy mouse skitters across.
     Mouse,
+    /// A dog's bark: cats arch, squids jet away.
+    Bark,
     /// Bubble stream; x position as 0..1 of the width.
     Bubbles(f32),
 }
@@ -41,6 +45,7 @@ impl Msg {
             Msg::Nak => format!("{pid} NAK"),
             Msg::Arrive(c) => format!("{pid} ARR {c}"),
             Msg::ArriveCat(c) => format!("{pid} ARRC {c}"),
+            Msg::ArriveDog(c) => format!("{pid} ARRD {c}"),
             Msg::Color(c) => format!("{pid} COL {c}"),
             Msg::Recall => format!("{pid} RCL"),
             Msg::Home => format!("{pid} HOME"),
@@ -48,6 +53,7 @@ impl Msg {
             Msg::Fish => format!("{pid} FISH"),
             Msg::Ink => format!("{pid} INK"),
             Msg::Mouse => format!("{pid} MOUSE"),
+            Msg::Bark => format!("{pid} BRK"),
             Msg::Bubbles(x) => format!("{pid} BUB {x:.3}"),
         }
     }
@@ -68,6 +74,7 @@ impl Msg {
             "NAK" => Msg::Nak,
             "ARR" => Msg::Arrive(a?.parse().ok()?),
             "ARRC" => Msg::ArriveCat(a?.parse().ok()?),
+            "ARRD" => Msg::ArriveDog(a?.parse().ok()?),
             "COL" => Msg::Color(a?.parse().ok()?),
             "RCL" => Msg::Recall,
             "HOME" => Msg::Home,
@@ -75,6 +82,7 @@ impl Msg {
             "FISH" => Msg::Fish,
             "INK" => Msg::Ink,
             "MOUSE" => Msg::Mouse,
+            "BRK" => Msg::Bark,
             "BUB" => Msg::Bubbles(a?.parse::<f32>().ok()?.clamp(0.0, 1.0)),
             _ => return None,
         };
@@ -231,6 +239,8 @@ mod tests {
             Msg::Fish,
             Msg::Ink,
             Msg::Mouse,
+            Msg::Bark,
+            Msg::ArriveDog(5),
         ] {
             assert_eq!(Msg::decode(&m.encode(42)), Some((42, m)));
         }
@@ -238,6 +248,12 @@ mod tests {
             matches!(Msg::decode("5 BUB 0.250"), Some((5, Msg::Bubbles(x))) if (x - 0.25).abs() < 1e-3)
         );
         assert_eq!(Msg::decode("garbage"), None);
+        assert_eq!(Msg::decode("3 BRK").map(|m| m.1), Some(Msg::Bark));
+        assert_eq!(
+            Msg::decode("3 ARRD 5").map(|m| m.1),
+            Some(Msg::ArriveDog(5))
+        );
+        assert_eq!(Msg::decode("3 ZZZ 1"), None);
         assert_eq!(Msg::decode("1 ARR x"), None);
     }
 

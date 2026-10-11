@@ -283,6 +283,8 @@ pub struct Body {
     pub bang: bool,
     /// Ink splat on the fur: (seconds left, x offset).
     pub splat: Option<(f32, f32)>,
+    // ---- dog only ----
+    pub dpose: crate::dog::DogPose,
 }
 
 impl Default for Body {
@@ -322,6 +324,7 @@ impl Default for Body {
             tail: 1.0,
             bang: false,
             splat: None,
+            dpose: Default::default(),
         }
     }
 }
@@ -350,17 +353,17 @@ pub fn render(app: &App, ascii: bool) -> Canvas {
         cv.text_center(h as i32 / 2, "terminal too small (min 40x12)", PEACH);
         return cv;
     }
-    let cat = app.is_cat();
-    if cat {
-        crate::cat_art::draw_room(&mut cv, app);
+    let pet = app.pet();
+    if let Some(p) = pet {
+        p.draw_scene(&mut cv, app);
     } else {
         draw_world(&mut cv, app);
     }
     draw_bubbles(&mut cv, app);
     let bodies = app.bodies();
     for (i, b) in bodies.iter().enumerate() {
-        if b.kind == crate::app::Kind::Cat {
-            crate::cat_art::draw_cat_into(&mut cv, b, app.mono, i as u8, app.w, app.h);
+        if let Some(p) = b.kind.pet() {
+            p.draw_body(&mut cv, b, app, i as u8);
         } else {
             draw_squid(&mut cv, b, app, i as u8);
         }
@@ -384,13 +387,10 @@ pub fn render(app: &App, ascii: bool) -> Canvas {
     }
     cv.text_center(
         hh - 1,
-        match (cat, app.social) {
-            (false, true) => "[f] feed   [p] pet   [space] play   [v] visit   [c] color   [q] quit",
-            (false, false) => "[f] feed   [p] pet   [space] play   [c] color   [q] quit",
-            (true, true) => {
-                "[f] treat   [p] pet   [space] laser   [v] visit   [c] breed   [q] quit"
-            }
-            (true, false) => "[f] treat   [p] pet   [space] laser   [c] breed   [q] quit",
+        match (pet, app.social) {
+            (None, true) => "[f] feed   [p] pet   [space] play   [v] visit   [c] color   [q] quit",
+            (None, false) => "[f] feed   [p] pet   [space] play   [c] color   [q] quit",
+            (Some(p), social) => p.hints(social),
         },
         DIM,
     );
@@ -456,25 +456,10 @@ fn draw_fx(cv: &mut Canvas, app: &App) {
             cv.put(hr.x.round() as i32, hr.y.round() as i32, '\u{2665}', c);
         }
     }
-    if app.is_cat() {
-        for (fx, fy) in app.foods() {
-            cv.text(
-                fx.round() as i32 - 1,
-                fy.round() as i32,
-                "(o)",
-                (0xE0, 0xA0, 0x50),
-            );
-        }
-        if let Some((lx, ly)) = app.laser_pos() {
-            cv.put(
-                lx.round() as i32,
-                ly.round() as i32,
-                '\u{25cf}',
-                (0xFF, 0x20, 0x20),
-            );
-        }
+    if let Some(p) = app.pet() {
+        p.draw_fx(cv, app);
     }
-    for (fx, fy) in app.foods().into_iter().filter(|_| !app.is_cat()) {
+    for (fx, fy) in app.foods().into_iter().filter(|_| app.pet().is_none()) {
         let (x, y) = (fx.round() as i32 - 2, fy.round() as i32);
         cv.text(x, y, "~(o>", FOOD);
         cv.put(x + 2, y, 'o', WHITE);
@@ -502,8 +487,8 @@ fn draw_fx(cv: &mut Canvas, app: &App) {
         if f.mouse {
             let (txt, dx) = if f.vx >= 0.0 { ("~o", -1) } else { ("o~", -1) };
             cv.text(x + dx, y, txt, (0xF0, 0xF0, 0xFF));
-        } else if app.is_cat() && !f.ink {
-            cv.text(x - 1, y, "(o)", (0xE0, 0xA0, 0x50));
+        } else if let (Some(p), false) = (app.pet(), f.ink) {
+            cv.text(x - 1, y, p.treat_glyph(), (0xE0, 0xA0, 0x50));
         } else if f.ink {
             cv.text(x - 1, y, "\u{2592}\u{2593}\u{2588}", INK);
         } else if f.vx > 0.0 {

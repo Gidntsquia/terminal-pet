@@ -4,6 +4,7 @@ use crate::app::Kind;
 use crate::app::{App, Behavior, Flyer, Heart, Key, State, ease};
 use crate::art::{Body, PRESETS};
 use crate::link::Msg;
+use crate::pet::Throw;
 use rand::Rng;
 use rand::seq::SliceRandom;
 
@@ -18,6 +19,10 @@ const HELLO: f32 = 0.3;
 const PEER_TIMEOUT: f32 = 1.0;
 /// Minimum seconds between sent fish, and between sent ink puffs.
 pub const SEND_GAP: f32 = 5.0;
+/// Seconds a pet reacts to a bark.
+pub const BARK_T: f32 = 1.6;
+/// Seconds a squid spends jetting away from a bark.
+pub const SCARE_T: f32 = 4.0;
 const AWAY_FAILSAFE: f32 = 45.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -73,12 +78,15 @@ pub struct Guest {
     pub startle_dir: f32,
     /// Ink splat on a cat guest: (seconds left, x offset).
     pub splat: Option<(f32, f32)>,
+    /// Seconds left of a reaction to a bark.
+    pub bark: f32,
 }
 
 pub enum In {
     Fish,
     Ink,
     Mouse,
+    Bark,
     Bubbles(f32),
 }
 
@@ -106,7 +114,7 @@ const VISIT_MIN: f32 = 1200.0;
 const VISIT_MAX: f32 = 1800.0;
 const VISIT_COOLDOWN: f32 = 600.0;
 
-fn sin_pulse(s: f32, len: f32) -> f32 {
+pub(crate) fn sin_pulse(s: f32, len: f32) -> f32 {
     if (0.0..len).contains(&s) {
         (std::f32::consts::PI * s / len).sin()
     } else {
@@ -116,7 +124,7 @@ fn sin_pulse(s: f32, len: f32) -> f32 {
 
 impl Guest {
     /// Sideways jerk (cells) of a startle.
-    fn jerk(&self) -> f32 {
+    pub(crate) fn jerk(&self) -> f32 {
         if self.startle > 0.0 {
             2.0 * ease(((crate::app::STARTLE_T - self.startle) / 0.15).min(1.0))
         } else {
@@ -156,10 +164,9 @@ impl App {
 
     /// Unscaled layout of this process's own pet.
     fn geo_full(&self) -> crate::art::Geo {
-        if self.kind == Kind::Cat {
-            crate::cat_art::geo_cat(self.w, self.h, 1.0)
-        } else {
-            crate::art::geo(self.w, self.h)
+        match self.pet() {
+            Some(p) => p.geo(self.w, self.h, 1.0),
+            None => crate::art::geo(self.w, self.h),
         }
     }
 
@@ -306,45 +313,66 @@ impl App {
                     }
                 }
             }
-            Key::Play => {
-                let mouse = self.kind == Kind::Cat;
-                // A guest of the other kind in this scene is the local target.
-                let want = if mouse { Kind::Squid } else { Kind::Cat };
-                let tgt = self
-                    .guests
-                    .iter()
-                    .find(|g| g.kind == want)
-                    .map(|g| (g.pid, g.x));
-                let cand = self.pick_cand();
-                if self.t - self.last_ink_send >= SEND_GAP && (cand.is_some() || tgt.is_some()) {
-                    self.last_ink_send = self.t;
-                    let mx = self.mouth_x();
-                    let side = match tgt {
-                        Some((_, gx)) => {
-                            if gx >= mx {
-                                1.0
-                            } else {
-                                -1.0
-                            }
-                        }
-                        None => self.rand_side(),
-                    };
-                    self.flyers.push(Flyer {
-                        x: mx,
-                        y: if mouse { g_floor(self) as f32 } else { y },
-                        vx: side * 45.0,
-                        ink: !mouse,
-                        mouse,
-                        hit_x: None,
-                        target: tgt.map(|t| t.0),
-                    });
-                    let m = if mouse { Msg::Mouse } else { Msg::Ink };
-                    if let Some(p) = cand {
-                        self.outbox.push((Some(p), m));
+            Key::Play => match self.pet().map(|p| p.throws()) {
+                Some(Throw::Bark) => self.send_bark(),
+                thrown => self.send_thrown(thrown == Some(Throw::Mouse), y),
+            },
+            Key::Pet => {}
+        }
+    }
+
+    /// The squid's ink or a cat's toy mouse, flung at a guest in the scene and a neighbor.
+    fn send_thrown(&mut self, mouse: bool, y: f32) {
+        // A guest of another kind in this scene is the local target.
+        let kind = self.kind;
+        let tgt = self
+            .guests
+            .iter()
+            .find(|g| g.kind != kind)
+            .map(|g| (g.pid, g.x));
+        let cand = self.pick_cand();
+        if self.t - self.last_ink_send >= SEND_GAP && (cand.is_some() || tgt.is_some()) {
+            self.last_ink_send = self.t;
+            let mx = self.mouth_x();
+            let side = match tgt {
+                Some((_, gx)) => {
+                    if gx >= mx {
+                        1.0
+                    } else {
+                        -1.0
                     }
                 }
+                None => self.rand_side(),
+            };
+            self.flyers.push(Flyer {
+                x: mx,
+                y: if mouse { g_floor(self) as f32 } else { y },
+                vx: side * 45.0,
+                ink: !mouse,
+                mouse,
+                hit_x: None,
+                target: tgt.map(|t| t.0),
+            });
+            let m = if mouse { Msg::Mouse } else { Msg::Ink };
+            if let Some(p) = cand {
+                self.outbox.push((Some(p), m));
             }
-            Key::Pet => {}
+        }
+    }
+
+    /// A bark: guests of other kinds in this scene react at once, neighbors get `Msg::Bark`.
+    fn send_bark(&mut self) {
+        let kind = self.kind;
+        let any_guest = self.guests.iter().any(|g| g.kind != kind);
+        let cand = self.pick_cand();
+        if self.t - self.last_ink_send >= SEND_GAP && (cand.is_some() || any_guest) {
+            self.last_ink_send = self.t;
+            for g in self.guests.iter_mut().filter(|g| g.kind != kind) {
+                g.bark = BARK_T;
+            }
+            if let Some(p) = cand {
+                self.outbox.push((Some(p), Msg::Bark));
+            }
         }
     }
 
@@ -402,13 +430,10 @@ impl App {
             }
             Msg::Arrive(c) => self.on_arrive(from, c as usize, Kind::Squid),
             Msg::ArriveCat(c) => self.on_arrive(from, c as usize, Kind::Cat),
+            Msg::ArriveDog(c) => self.on_arrive(from, c as usize, Kind::Dog),
             Msg::Color(c) => {
                 if let Some(g) = self.guests.iter_mut().find(|g| g.pid == from) {
-                    let n = if g.kind == Kind::Cat {
-                        crate::cat::BREEDS.len()
-                    } else {
-                        PRESETS.len()
-                    };
+                    let n = g.kind.breed_names().len();
                     g.color = (c as usize).min(n - 1);
                 }
             }
@@ -432,6 +457,7 @@ impl App {
             Msg::Fish => self.queue_in(In::Fish, 0.6),
             Msg::Ink => self.queue_in(In::Ink, 0.6),
             Msg::Mouse => self.queue_in(In::Mouse, 0.6),
+            Msg::Bark => self.queue_in(In::Bark, 0.6),
             Msg::Bubbles(x) => self.queue_in(In::Bubbles(x), 0.8),
             Msg::Hello { .. } | Msg::Bye => {}
         }
@@ -494,12 +520,8 @@ impl App {
         }
         self.reserved.retain(|r| r.0 != from);
         self.guests.retain(|g| g.pid != from);
-        let n = if kind == Kind::Cat {
-            crate::cat::BREEDS.len()
-        } else {
-            PRESETS.len()
-        };
-        let color = color.min(n - 1);
+        let names = kind.breed_names();
+        let color = color.min(names.len() - 1);
         let left = self.guests.iter().filter(|g| g.side < 0.0).count();
         let right = self.guests.len() - left;
         let side = if left <= right { -1.0 } else { 1.0 };
@@ -523,12 +545,9 @@ impl App {
             startle: 0.0,
             startle_dir: 0.0,
             splat: None,
+            bark: 0.0,
         });
-        let name = if kind == Kind::Cat {
-            crate::cat::BREEDS[color].name
-        } else {
-            PRESETS[color].0
-        };
+        let name = names[color];
         self.note(&format!("A {name} friend is here!"), 3.0);
     }
 
@@ -597,17 +616,15 @@ impl App {
         for d in mice {
             self.startle = crate::app::STARTLE_T;
             self.startle_dir = d;
+            if let Some(p) = self.pet() {
+                p.on_mouse(self, d);
+            }
         }
         self.flyers
             .retain(|f| (f.vx != 0.0 || f.hit_x.is_some()) && f.x > -8.0 && f.x < w + 8.0);
         for (x, y) in hits {
-            if self.kind == Kind::Cat {
-                // inked: dark splat on the fur, sneeze, shake it off
-                self.splat = Some((2.0, x - self.mouth_x()));
-                self.state = State::IdleBehavior(Behavior::InkPuff);
-                self.st = 0.0;
-                self.cat_sneeze();
-                self.note("Pfft!", 2.0);
+            if let Some(p) = self.pet() {
+                p.on_ink(self, x - self.mouth_x());
                 continue;
             }
             self.spawn_ink_v(x, y, 16, 0.0, 14.0);
@@ -656,10 +673,9 @@ impl App {
                 if u < LEAVE_T {
                     self.home = Home::Leaving { to, u, side };
                 } else if self.peers.contains_key(&to) {
-                    let m = if self.kind == Kind::Cat {
-                        Msg::ArriveCat(self.color_idx() as u8)
-                    } else {
-                        Msg::Arrive(self.color_idx() as u8)
+                    let m = match self.pet() {
+                        Some(p) => p.arrive_msg(self.color_idx() as u8),
+                        None => Msg::Arrive(self.color_idx() as u8),
                     };
                     self.outbox.push((Some(to), m));
                     self.home = Home::Away {
@@ -729,6 +745,7 @@ impl App {
             g.age += dt;
             g.tag = (g.tag - dt).max(0.0);
             g.startle = (g.startle - dt).max(0.0);
+            g.bark = (g.bark - dt).max(0.0);
             if let Some((l, x)) = g.splat {
                 g.splat = (l > dt).then_some((l - dt, x));
             }
@@ -888,6 +905,34 @@ impl App {
         }
     }
 
+    /// A bark lands on `pid` (the host or a guest in this scene).
+    fn bark_at(&mut self, pid: u32) {
+        if pid == self.pid {
+            if let Some(p) = self.pet() {
+                p.on_bark(self);
+            } else {
+                self.scare = SCARE_T;
+            }
+        } else if let Some(g) = self.guests.iter_mut().find(|g| g.pid == pid) {
+            g.bark = BARK_T;
+        }
+    }
+
+    /// Squid ink lands on `pid`: pets get a splat and react; a squid is just inked.
+    fn ink_at(&mut self, pid: u32) {
+        if self.kind_of(pid).pet().is_none() {
+            return;
+        }
+        if pid == self.pid {
+            if let Some(p) = self.pet() {
+                p.on_ink(self, 0.0);
+            }
+        } else if let Some(gu) = self.guests.iter_mut().find(|gu| gu.pid == pid) {
+            gu.splat = Some((2.0, 0.0));
+            self.note("Pfft!", 2.0);
+        }
+    }
+
     fn move_events(&mut self, ctl: &mut PlayCtl, pos: &[f32]) {
         let n = ctl.parts.len();
         let g = self.geo();
@@ -921,42 +966,32 @@ impl App {
                         let d = pos[to] - pos[from];
                         let sign = if d >= 0.0 { 1.0 } else { -1.0 };
                         let dist = d.abs().max(10.0);
-                        let from_cat = self.kind_of(ctl.parts[from]) == Kind::Cat;
+                        let from_pid = ctl.parts[from];
                         let to_pid = ctl.parts[to];
-                        if from_cat {
-                            // the cat's turn: it throws the toy mouse
-                            self.flyers.push(Flyer {
-                                x: pos[from] + sign * g.maxw * 0.6,
-                                y: g_floor(self) as f32,
-                                vx: sign * 45.0,
-                                ink: false,
-                                mouse: true,
-                                hit_x: (to_pid == self.pid).then_some(pos[to]),
-                                target: (to_pid != self.pid).then_some(to_pid),
-                            });
-                        } else {
-                            let saved = self.kind;
-                            self.kind = Kind::Squid;
-                            self.spawn_ink_v(
-                                pos[from] + sign * g.maxw * 0.6,
-                                y,
-                                26,
-                                sign * dist * 2.4,
-                                3.0,
-                            );
-                            self.kind = saved;
-                            if self.kind_of(to_pid) == Kind::Cat {
-                                if to_pid == self.pid {
-                                    self.splat = Some((2.0, 0.0));
-                                    self.state = State::IdleBehavior(Behavior::InkPuff);
-                                    self.st = 0.0;
-                                    self.cat_sneeze();
-                                } else if let Some(gu) =
-                                    self.guests.iter_mut().find(|gu| gu.pid == to_pid)
-                                {
-                                    gu.splat = Some((2.0, 0.0));
-                                }
-                                self.note("Pfft!", 2.0);
+                        let thrown = self.kind_of(from_pid).pet().map(|p| p.throws());
+                        match thrown {
+                            Some(Throw::Mouse) => {
+                                // the cat's turn: it throws the toy mouse
+                                self.flyers.push(Flyer {
+                                    x: pos[from] + sign * g.maxw * 0.6,
+                                    y: g_floor(self) as f32,
+                                    vx: sign * 45.0,
+                                    ink: false,
+                                    mouse: true,
+                                    hit_x: (to_pid == self.pid).then_some(pos[to]),
+                                    target: (to_pid != self.pid).then_some(to_pid),
+                                });
+                            }
+                            Some(Throw::Bark) => self.bark_at(to_pid),
+                            None => {
+                                self.spawn_ink_v(
+                                    pos[from] + sign * g.maxw * 0.6,
+                                    y,
+                                    26,
+                                    sign * dist * 2.4,
+                                    3.0,
+                                );
+                                self.ink_at(to_pid);
                             }
                         }
                     }
@@ -1017,6 +1052,10 @@ impl App {
                     target: None,
                 });
             }
+            In::Bark => match self.pet() {
+                Some(p) => p.on_bark(self),
+                None => self.scare = SCARE_T,
+            },
             In::Mouse => {
                 let side = self.rand_side();
                 let x = if side < 0.0 { -2.0 } else { w + 2.0 };
@@ -1038,11 +1077,7 @@ impl App {
                         x,
                         y: self.h as f32 - 3.0 + k as f32 * 1.6,
                         vy: self.vrng.random_range(2.5..5.0),
-                        ch: if self.kind == Kind::Cat {
-                            ['.', '*', '\u{b0}'][self.vrng.random_range(0..3)]
-                        } else {
-                            ['o', 'O', '\u{b0}'][self.vrng.random_range(0..3)]
-                        },
+                        ch: self.mote_chars()[self.vrng.random_range(0..3)],
                         phase: self.vrng.random_range(0.0..std::f32::consts::TAU),
                     });
                 }
@@ -1092,7 +1127,7 @@ impl App {
                         x,
                         y: (g.top + g.mh) as f32 + k as f32 * 1.6,
                         vy: self.vrng.random_range(3.0..5.0),
-                        ch: if self.kind == Kind::Cat { '*' } else { 'o' },
+                        ch: self.stream_char(),
                         phase: self.vrng.random_range(0.0..std::f32::consts::TAU),
                     });
                 }
@@ -1110,55 +1145,19 @@ impl App {
         v
     }
 
+    pub fn mote_chars(&self) -> [char; 3] {
+        self.pet().map_or(['o', 'O', '\u{b0}'], |p| p.mote_chars())
+    }
+
+    pub fn stream_char(&self) -> char {
+        self.pet().map_or('o', |p| p.stream_char())
+    }
+
     fn guest_body(&self, g: &Guest) -> Body {
         let cx = self.geo().cx;
         let tt = self.t + g.t0;
-        if g.kind == Kind::Cat {
-            return Body {
-                kind: Kind::Cat,
-                breed: g.color,
-                breed_from: g.color,
-                bfade: 1.0,
-                boop: (g.touch.boop / crate::app::BOOP).clamp(0.0, 1.0),
-                head_dy: g.touch.dy(),
-                dir: g.touch.dir,
-                tail: g.touch.tail_side(),
-                pose: crate::cat::CatPose {
-                    tail_tw: if (tt % 6.0) < 0.5 {
-                        (tt * 30.0).sin()
-                    } else {
-                        0.0
-                    },
-                    sneeze: g.splat.map_or(0.0, |(l, _)| sin_pulse(1.7 - l, 0.45)),
-                    wiggle: g.splat.map_or(0.0, |(l, _)| {
-                        if l < 1.4 {
-                            (tt * 40.0).sin() * l / 1.4
-                        } else {
-                            0.0
-                        }
-                    }),
-                    ..Default::default()
-                },
-                splat: g.splat,
-                cx,
-                dx: g.x - cx as f32 + g.fx.dx,
-                dy: g.fx.dy,
-                scale: self.scale,
-                blush: (g.touch.stroke / 0.5).min(1.0),
-                bright: g.fx.bright,
-                dark: g.fx.dark,
-                closed: g.touch.stroke > 0.0,
-                blink: tt % 5.0 < 0.15,
-                lean: 0.25 * g.touch.lean(),
-                food_x: g.x,
-                t: tt,
-                touch: ease(g.touch.touch),
-                touch_at: g.touch.at,
-                ruffle: g.touch.ruffle_k(),
-                ruffle_at: g.touch.ruffle_at,
-                tag: (g.tag > 0.0).then_some("guest"),
-                ..Body::default()
-            };
+        if let Some(p) = g.kind.pet() {
+            return p.guest_body(self, g);
         }
         Body {
             pal: PRESETS[g.color].1,
