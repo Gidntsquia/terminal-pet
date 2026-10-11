@@ -304,27 +304,43 @@ impl DogPose {
     }
 }
 
-/// The hand-drawn poses of the `p` roll-over, played in this order.
+/// The hand-drawn poses of the `p` roll-over, played in this order after the seated pose.
+/// It follows how a real dog rolls: down on its belly, flop onto one side, over the back
+/// with the legs bent and tucked, onto the other side, up, and sit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RollPose {
-    /// Tipping over sideways from the seated pose.
-    Tip,
-    /// Lying on its side, belly and legs toward the viewer.
+    /// Lying down on its belly (sphinx): front legs forward, hind legs tucked, head up.
+    Down,
+    /// Flat on its side, belly toward the viewer, legs out to that side.
     SideA,
-    /// On its back, four legs up, belly showing, head upside down.
+    /// Half way over: back partly down, legs bent and tucked toward the belly.
+    TwistA,
+    /// On its back, belly up, head tilted back, paws curled, hind legs bent and splayed.
     Back,
-    /// Lying on the other side, back toward the viewer.
+    /// Half way over the other way.
+    TwistB,
+    /// Flat on the other side, back toward the viewer, paws peeking over the belly.
     SideB,
-    /// On its belly, head up, front paws forward, about to sit up.
-    Rise,
+    /// Up on its feet, seen from the side.
+    Stand,
+    /// Sitting back down (the seated pose).
+    Sit,
 }
 
-/// Seconds spent in each roll pose; the belly-up pose takes whatever is left.
-pub const ROLL_TIP: f32 = 0.7;
-pub const ROLL_SIDE: f32 = 0.5;
-pub const ROLL_RISE: f32 = 0.7;
-/// Shortest roll-over (belly-up for 1.5 s).
-pub const ROLL_LEN: f32 = ROLL_TIP + ROLL_SIDE + 1.5 + ROLL_SIDE + ROLL_RISE;
+/// Seconds in each roll pose, in order; the belly-up pose takes whatever is left over.
+pub const ROLL_TIMES: [f32; 8] = [0.6, 0.5, 0.3, 1.4, 0.3, 0.5, 0.4, 0.5];
+/// Whole roll-over (about 4.5 s).
+pub const ROLL_LEN: f32 = 0.6 + 0.5 + 0.3 + 1.4 + 0.3 + 0.5 + 0.4 + 0.5;
+const ROLL_POSES: [RollPose; 8] = [
+    RollPose::Down,
+    RollPose::SideA,
+    RollPose::TwistA,
+    RollPose::Back,
+    RollPose::TwistB,
+    RollPose::SideB,
+    RollPose::Stand,
+    RollPose::Sit,
+];
 
 impl DogPose {
     /// The roll pose being shown and how far through it (0..1), or None when not rolling.
@@ -332,37 +348,25 @@ impl DogPose {
         if self.roll < 1.0 {
             return None;
         }
-        let k = self.roll.fract();
-        let pose = match self.roll as u32 {
-            1 => RollPose::Tip,
-            2 => RollPose::SideA,
-            3 => RollPose::Back,
-            4 => RollPose::SideB,
-            _ => RollPose::Rise,
-        };
-        Some((pose, k))
+        let i = (self.roll as usize - 1).min(ROLL_POSES.len() - 1);
+        Some((ROLL_POSES[i], self.roll.fract()))
     }
 }
 
-/// Flipbook position (`DogPose::roll`) at `st` seconds into a pet reaction of `dur` seconds.
+/// Flipbook position (`DogPose::roll`) at `st` seconds into a pet reaction of `dur` seconds:
+/// pose index + 1 plus the progress through that pose; 0 when not rolling.
 pub fn roll_at(st: f32, dur: f32) -> f32 {
-    let back_end = (dur - ROLL_SIDE - ROLL_RISE).max(ROLL_TIP + ROLL_SIDE + 0.1);
-    let marks = [
-        0.0,
-        ROLL_TIP,
-        ROLL_TIP + ROLL_SIDE,
-        back_end,
-        back_end + ROLL_SIDE,
-        back_end + ROLL_SIDE + ROLL_RISE,
-    ];
-    if st < 0.0 || st >= marks[5] {
+    let mut t = ROLL_TIMES;
+    t[3] += (dur - ROLL_LEN).max(0.0);
+    let mut start = 0.0;
+    if st < 0.0 {
         return 0.0;
     }
-    for i in 0..5 {
-        if st < marks[i + 1] {
-            let k = (st - marks[i]) / (marks[i + 1] - marks[i]);
-            return (i + 1) as f32 + k.min(0.999);
+    for (i, d) in t.iter().enumerate() {
+        if st < start + d {
+            return (i + 1) as f32 + ((st - start) / d).min(0.999);
         }
+        start += d;
     }
     0.0
 }
@@ -843,6 +847,15 @@ impl App {
 pub struct DogPet;
 pub static DOG: DogPet = DogPet;
 
+/// A squid guest's size factor (absolute, not relative to the host's) and height in rows:
+/// 0.6 of the seated dog's height.
+fn squid_guest_size(app: &App) -> (f32, i32) {
+    let (_, hh) = crate::dog_art::seat_dims(app.w, app.h, app.scale);
+    let s = 0.57 * (hh + 1.0) / (app.h as f32 * 0.8);
+    let total = ((app.h as f32 * 0.8 * s).round() as i32).max(8);
+    (s, total)
+}
+
 impl Pet for DogPet {
     fn kind(&self) -> Kind {
         Kind::Dog
@@ -1031,9 +1044,38 @@ impl Pet for DogPet {
                 let total = ((app.h as f32 * 0.68 * app.scale * 0.6).round() as i32).max(8);
                 (0.6, (ground - (3 + total) + 1) as f32)
             }
-            // a visiting squid floats above the lawn
-            Kind::Squid => (0.4, app.h as f32 * 0.3),
+            // a visiting squid floats over the lawn, about 0.6 of the seated dog's height
+            // (as in the cat room) with all its tentacles above the grass
+            Kind::Squid => {
+                let (s, total) = squid_guest_size(app);
+                let fit = s / app.scale.max(0.05);
+                (fit, (ground - 4 - total) as f32 - 1.0)
+            }
             Kind::Dog => (1.0, 0.0),
+        }
+    }
+    fn guest_x(&self, app: &App, guest: Kind, x: f32) -> f32 {
+        if guest != Kind::Squid {
+            return x;
+        }
+        // keep the squid (tentacle tips included) on the open lawn, clear of the doghouse
+        // and of the seated dog
+        let (s, _) = squid_guest_size(app);
+        let g = crate::art::geo_s(app.w, app.h, s);
+        let half = (g.hwh * 0.9 * 3.4 + g.maxw * 0.5).max(g.maxw + 2.0);
+        let (ww, _) = crate::dog_art::seat_dims(app.w, app.h, app.scale);
+        let dog_x = app.geo().cx as f32 + app.host_dx;
+        let dog_half = 0.45 * ww;
+        if x < dog_x {
+            let house = crate::dog_art::house_right(app.w, app.h) as f32 + 1.0;
+            let (lo, hi) = (house + half + 1.0, dog_x - dog_half - half - 1.0);
+            if lo <= hi {
+                (lo + hi) / 2.0
+            } else {
+                (house + dog_x - dog_half) / 2.0
+            }
+        } else {
+            x.max(dog_x + dog_half + half + 1.0)
         }
     }
     fn guest_body(&self, app: &App, g: &Guest) -> Body {
@@ -1299,19 +1341,23 @@ mod tests {
             a.state = State::Idle;
             a.st = 0.0;
             a.dog.next_wag = 1e9;
+            // no drift across the yard, so the frames line up
+            a.burst.2 = 99.0;
+            a.next_burst = 1e9;
             a
         };
         let mut a = fresh();
         a.press(Key::Pet);
         let mut t = 0.0;
         for (name, at) in [
-            ("roll1_tip", 0.4),
-            ("roll2_side", 0.95),
-            ("roll3_back", 1.6),
-            ("roll3_back_b", 2.3),
-            ("roll4_side", 3.0),
-            ("roll5_rise", 3.35),
-            ("roll6_sit", 3.75),
+            ("roll1_down", 0.3),
+            ("roll2_side", 0.85),
+            ("roll3_twist", 1.25),
+            ("roll4_back", 2.1),
+            ("roll5_twist", 2.95),
+            ("roll6_side", 3.35),
+            ("roll7_stand", 3.8),
+            ("roll8_sit", 4.25),
         ] {
             while t < at {
                 a.update(1.0 / 16.0);
@@ -1392,6 +1438,46 @@ mod tests {
 
     fn hello(a: &mut App, from: u32, away: bool) {
         a.on_msg(from, Msg::Hello { away, accept: true });
+    }
+
+    /// A squid guest in the yard after `secs` seconds (rendered for real).
+    fn squid_guest(w: u16, h: u16, secs: f32) -> App {
+        let mut a = dog(w, h, 5);
+        a.enable_social(1);
+        hello(&mut a, 2, false);
+        a.on_msg(2, Msg::Arrive(0));
+        a.state = State::Idle;
+        a.dog.next_wag = 1e9;
+        for _ in 0..(secs * 16.0) as usize {
+            a.update(1.0 / 16.0);
+            a.state = State::Idle;
+            hello(&mut a, 2, false);
+        }
+        a
+    }
+
+    /// Dev helper: `SNAP_DIR=/tmp/x cargo test snap_guest` writes the dog hosting a squid.
+    #[test]
+    fn snap_guest() {
+        let Ok(dir) = std::env::var("SNAP_DIR") else {
+            return;
+        };
+        for (w, h) in [(120u16, 40u16), (200, 50)] {
+            let a = squid_guest(w, h, 4.0);
+            let cv = crate::art::render(&a, false);
+            let mut out = String::new();
+            for y in 0..cv.h {
+                for x in 0..cv.w {
+                    let c = cv.cells[y * cv.w + x];
+                    match c.fg {
+                        Some((r, g, b)) => out.push_str(&format!("\x1b[38;2;{r};{g};{b}m{}", c.ch)),
+                        None => out.push_str(&format!("\x1b[0m{}", c.ch)),
+                    }
+                }
+                out.push_str("\x1b[0m\n");
+            }
+            std::fs::write(format!("{dir}/guest_{w}x{h}.ans"), out).unwrap();
+        }
     }
 
     #[test]

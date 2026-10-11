@@ -769,6 +769,8 @@ impl App {
                     }
                 }
                 Some(i) => {
+                    let kind = self.guests[*i].kind;
+                    let sx = self.pet().map_or(sx, |p| p.guest_x(self, kind, sx));
                     let g = &mut self.guests[*i];
                     match g.phase {
                         GPhase::Entering => {

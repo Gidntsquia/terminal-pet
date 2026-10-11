@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Render `tmux capture-pane -e -p` output (truecolor SGR) to a PNG.
 
-Usage: ansi2png.py in.ansi out.png   (needs Pillow; 10x20 px cells, so 120x40 -> 1200x800)
+Usage: ansi2png.py in.ansi out.png   (needs Pillow; 10x20 px cells, so 120x40 -> 1200x800;
+at least 120 columns, wider when the capture is wider)
 """
 import re
 import sys
@@ -18,11 +19,11 @@ def main(src, dst):
     lines = open(src, encoding="utf-8").read().split("\n")
     if lines and lines[-1] == "":
         lines.pop()
-    cols = 120
+    sgr = re.compile(r"\x1b\[([0-9;]*)m")
+    cols = max([120] + [len(sgr.sub("", l)) for l in lines])
     img = Image.new("RGB", (cols * CW, len(lines) * CH), BG)
     d = ImageDraw.Draw(img)
     font = ImageFont.truetype(FONT, 16)
-    sgr = re.compile(r"\x1b\[([0-9;]*)m")
     for y, line in enumerate(lines):
         fg, bg, x, pos = FG, None, 0, 0
         while pos < len(line):
