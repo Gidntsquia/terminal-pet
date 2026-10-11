@@ -888,6 +888,19 @@ impl Pet for DogPet {
     fn host_body(&self, app: &App) -> Body {
         app.dog_host_body()
     }
+    fn guest_fit(&self, app: &App, guest: Kind) -> (f32, f32) {
+        let ground = crate::dog_art::ground(app.w, app.h).0;
+        match guest {
+            // a visiting cat is smaller than the host and stands on the lawn
+            Kind::Cat => {
+                let total = ((app.h as f32 * 0.68 * app.scale * 0.6).round() as i32).max(8);
+                (0.6, (ground - (3 + total) + 1) as f32)
+            }
+            // a visiting squid floats above the lawn
+            Kind::Squid => (0.4, app.h as f32 * 0.3),
+            Kind::Dog => (1.0, 0.0),
+        }
+    }
     fn guest_body(&self, app: &App, g: &Guest) -> Body {
         let cx = app.geo().cx;
         let tt = app.t + g.t0;

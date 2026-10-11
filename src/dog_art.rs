@@ -32,7 +32,7 @@ fn hash(x: i32, y: i32) -> u32 {
 // ------------------------------------------------------------ layout
 
 /// (feet row, top row of the fence). The dog's feet touch row `feet - 1`.
-fn ground(w: u16, h: u16) -> (i32, i32) {
+pub fn ground(w: u16, h: u16) -> (i32, i32) {
     let _ = w;
     let h = h as i32;
     let fh = if h < 20 { 2 } else { 4 };

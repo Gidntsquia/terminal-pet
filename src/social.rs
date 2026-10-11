@@ -1153,19 +1153,25 @@ impl App {
         self.pet().map_or('o', |p| p.stream_char())
     }
 
+    /// Size factor and row shift for a guest of kind `k` in this pet's scene.
+    pub fn guest_fit(&self, k: Kind) -> (f32, f32) {
+        self.kind.pet().map_or((1.0, 0.0), |p| p.guest_fit(self, k))
+    }
+
     fn guest_body(&self, g: &Guest) -> Body {
         let cx = self.geo().cx;
         let tt = self.t + g.t0;
         if let Some(p) = g.kind.pet() {
             return p.guest_body(self, g);
         }
+        let fit = self.guest_fit(g.kind);
         Body {
             pal: PRESETS[g.color].1,
             cx,
             dx: g.x - cx as f32 + g.fx.dx - g.startle_dir * g.jerk(),
             bang: g.startle > 0.0,
-            dy: 1.0 + 0.6 * (tt * 0.35).sin() + g.fx.dy + g.touch.dy(),
-            scale: self.scale,
+            dy: 1.0 + 0.6 * (tt * 0.35).sin() + g.fx.dy + g.touch.dy() + fit.1,
+            scale: self.scale * fit.0,
             puff: 1.0
                 + 0.3
                     * sin_pulse(crate::app::STARTLE_T - g.startle, crate::app::STARTLE_T)

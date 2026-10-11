@@ -676,6 +676,7 @@ impl Pet for CatPet {
         let cx = app.geo().cx;
         let tt = app.t + g.t0;
         let barked = g.bark > 0.0;
+        let fit = app.guest_fit(Kind::Cat);
         Body {
             kind: Kind::Cat,
             breed: g.color,
@@ -707,11 +708,11 @@ impl Pet for CatPet {
             splat: g.splat,
             cx,
             dx: g.x - cx as f32 + g.fx.dx,
-            dy: g.fx.dy
+            dy: g.fx.dy + fit.1
                 - 1.2
                     * crate::social::sin_pulse(crate::social::BARK_T - g.bark, 0.4)
                     * barked as u8 as f32,
-            scale: app.scale,
+            scale: app.scale * fit.0,
             blush: (g.touch.stroke / 0.5).min(1.0),
             bright: g.fx.bright,
             dark: g.fx.dark,

@@ -71,6 +71,11 @@ pub trait Pet: Sync {
     fn offset(&self, app: &App) -> (f32, f32);
     fn host_body(&self, app: &App) -> Body;
     fn guest_body(&self, app: &App, g: &Guest) -> Body;
+    /// Size factor and row shift for a guest of kind `guest` visiting this pet's scene,
+    /// so e.g. a visiting cat is smaller than the dog and stands on the lawn.
+    fn guest_fit(&self, _app: &App, _guest: Kind) -> (f32, f32) {
+        (1.0, 0.0)
+    }
     /// Draw the background scene.
     fn draw_scene(&self, cv: &mut Canvas, app: &App);
     /// Draw one body (host or guest) with owner id `id` for hit testing.
