@@ -1666,11 +1666,13 @@ pub fn draw_dog(cv: &mut Canvas, body: &Body) {
         draw_inside(cv, body, &r);
         return;
     }
-    if let Some((pose, k)) = p.roll_pose() {
+    // the roll ends back in the seated pose for the last part of the rise
+    let sit_up = matches!(p.roll_pose(), Some((RollPose::Rise, k)) if k > 0.55);
+    if let Some((pose, k)) = p.roll_pose().filter(|_| !sit_up) {
         draw_roll(cv, body, pose, k);
         return;
     }
-    if p.seated() {
+    if p.seated() || sit_up {
         draw_sit(cv, body);
         return;
     }

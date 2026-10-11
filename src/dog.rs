@@ -1310,7 +1310,8 @@ mod tests {
             ("roll3_back", 1.6),
             ("roll3_back_b", 2.3),
             ("roll4_side", 3.0),
-            ("roll5_rise", 3.6),
+            ("roll5_rise", 3.35),
+            ("roll6_sit", 3.75),
         ] {
             while t < at {
                 a.update(1.0 / 16.0);
