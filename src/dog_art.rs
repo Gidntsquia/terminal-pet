@@ -462,7 +462,7 @@ fn draw_leg(r: &Rig, cv: &mut Canvas, p: &crate::dog::DogPose, u0: f32, ph: f32,
     } else {
         (swing, lift)
     };
-    let hw = (0.04 * r.m).max(1.5);
+    let hw = (0.065 * r.m).max(2.2);
     let top = r.vb;
     let col = if far { shade(b.coat, -0.6) } else { b.coat };
     r.fill(
