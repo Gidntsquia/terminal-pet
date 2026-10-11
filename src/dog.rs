@@ -23,6 +23,10 @@ pub enum Pat {
     /// White chest and socks.
     Corgi,
     Poodle,
+    /// Mottled cattle dog: speckled back, cream chest and legs.
+    Heeler,
+    /// Long floppy ears and a long muzzle.
+    Dachshund,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,7 +78,7 @@ const fn b(name: &'static str, coat: Rgb, dark: Rgb, light: Rgb, pat: Pat) -> Br
 }
 
 /// Cycle order for `c`.
-pub const BREEDS: [Breed; 8] = [
+pub const BREEDS: [Breed; 11] = [
     Breed {
         tail: Tail::Plume,
         ..b(
@@ -161,6 +165,45 @@ pub const BREEDS: [Breed; 8] = [
             (0x24, 0x20, 0x20),
             (0xE0, 0xB8, 0x80),
             Pat::Shepherd,
+        )
+    },
+    // the hot dog
+    Breed {
+        leg: 0.4,
+        size: 1.0,
+        tail: Tail::Straight,
+        ..b(
+            "dachshund",
+            (0x9A, 0x4E, 0x2A),
+            (0x5A, 0x2A, 0x16),
+            (0xC8, 0x82, 0x50),
+            Pat::Dachshund,
+        )
+    },
+    // Bluey and Bingo, the Heeler sisters
+    Breed {
+        ears_up: true,
+        tail: Tail::Bushy,
+        size: 1.0,
+        eye: (0x24, 0x14, 0x0C),
+        ..b(
+            "bluey",
+            (0x5C, 0x7C, 0xB0),
+            (0x32, 0x4A, 0x78),
+            (0xF0, 0xD4, 0xA0),
+            Pat::Heeler,
+        )
+    },
+    Breed {
+        ears_up: true,
+        tail: Tail::Bushy,
+        size: 0.92,
+        ..b(
+            "bingo",
+            (0xD0, 0x6A, 0x38),
+            (0xA0, 0x48, 0x20),
+            (0xF4, 0xDC, 0xB0),
+            Pat::Heeler,
         )
     },
 ];
@@ -1011,7 +1054,7 @@ mod tests {
     }
 
     #[test]
-    fn eight_breeds_in_order_and_parse() {
+    fn eleven_breeds_in_order_and_parse() {
         let names: Vec<_> = BREEDS.iter().map(|b| b.name).collect();
         assert_eq!(
             names,
@@ -1023,7 +1066,10 @@ mod tests {
                 "dalmatian",
                 "beagle",
                 "poodle",
-                "german shepherd"
+                "german shepherd",
+                "dachshund",
+                "bluey",
+                "bingo"
             ]
         );
         assert_eq!(pet::parse_breed(&DOG, "Corgi"), Some(Ok(3)));
@@ -1034,14 +1080,14 @@ mod tests {
     }
 
     #[test]
-    fn c_cycles_through_all_eight_with_a_message() {
+    fn c_cycles_through_all_eleven_with_a_message() {
         let mut a = dog(120, 40, 1);
         a.next_color();
         assert_eq!(a.cmsg.as_ref().unwrap().0, "I'm a lab today!");
         a.next_color();
         a.next_color();
         assert_eq!(a.cmsg.as_ref().unwrap().0, "I'm a corgi today!");
-        for _ in 0..5 {
+        for _ in 0..8 {
             a.next_color();
         }
         assert_eq!(a.color_idx(), 0);
@@ -1051,7 +1097,7 @@ mod tests {
     fn corgi_has_short_legs() {
         assert!(BREEDS[3].leg < 0.6 * BREEDS[0].leg);
         let pals: std::collections::HashSet<_> = BREEDS.iter().map(|b| (b.coat, b.dark)).collect();
-        assert_eq!(pals.len(), 8);
+        assert_eq!(pals.len(), 11);
     }
 
     #[test]

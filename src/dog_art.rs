@@ -420,6 +420,22 @@ fn coat_flat(r: &Rig, u: f32, v: f32, x: i32, y: i32) -> (char, Rgb) {
             }
         }
         Pat::Poodle => (if (x + y) % 3 == 0 { '@' } else { '\u{2588}' }, base),
+        Pat::Heeler => {
+            if rel < -0.4 || uu > 0.36 {
+                ('\u{2588}', shade(b.light, rel * 0.3))
+            } else if hash((u / 2.0).floor() as i32, v.floor() as i32).is_multiple_of(3) {
+                ('\u{2593}', b.dark)
+            } else {
+                ('\u{2588}', base)
+            }
+        }
+        Pat::Dachshund => {
+            if rel < -0.5 || uu > 0.38 {
+                ('\u{2588}', shade(b.light, rel * 0.3))
+            } else {
+                ('\u{2588}', base)
+            }
+        }
     }
 }
 
@@ -459,7 +475,12 @@ fn draw_leg(r: &Rig, cv: &mut Canvas, p: &crate::dog::DogPose, u0: f32, ph: f32,
             }
             let foot = v < 1.2;
             let (ch, mut c) = ('\u{2588}', col);
-            if foot && matches!(b.pat, Pat::Corgi | Pat::Beagle | Pat::Husky) {
+            if foot
+                && matches!(
+                    b.pat,
+                    Pat::Corgi | Pat::Beagle | Pat::Husky | Pat::Heeler | Pat::Dachshund
+                )
+            {
                 c = b.light;
             }
             if b.pat == Pat::Poodle && foot {
@@ -800,7 +821,10 @@ fn draw_sit(cv: &mut Canvas, body: &Body) {
                     return None;
                 }
                 if is_paw {
-                    let c = if matches!(b.pat, Pat::Corgi | Pat::Beagle | Pat::Husky) {
+                    let c = if matches!(
+                        b.pat,
+                        Pat::Corgi | Pat::Beagle | Pat::Husky | Pat::Heeler | Pat::Dachshund
+                    ) {
                         b.light
                     } else {
                         shade(b.coat, 0.6)
@@ -882,8 +906,15 @@ fn draw_sit_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
         } else {
             r.ell(
                 cv,
-                (hu + s * hru * 1.0, hv - hrv * (0.35 + tilt * 0.2)),
-                (hru * 0.3, hrv * 0.95),
+                (
+                    hu + s * hru * 1.0,
+                    hv - hrv * (if b.pat == Pat::Dachshund { 0.9 } else { 0.35 } + tilt * 0.2),
+                ),
+                if b.pat == Pat::Dachshund {
+                    (hru * 0.34, hrv * 1.6)
+                } else {
+                    (hru * 0.3, hrv * 0.95)
+                },
                 &|_, _, _, _| ('\u{2593}', c),
             );
         }
@@ -1013,7 +1044,10 @@ fn draw_lying(cv: &mut Canvas, body: &Body) {
         r.stamp(cv, -ru - k as f32, cvv + 0.5, '\u{2588}', b.coat);
     }
     // legs: from pointing out sideways (horizontal) to pointing up
-    let paw = if matches!(b.pat, Pat::Corgi | Pat::Beagle | Pat::Husky) {
+    let paw = if matches!(
+        b.pat,
+        Pat::Corgi | Pat::Beagle | Pat::Husky | Pat::Heeler | Pat::Dachshund
+    ) {
         b.light
     } else {
         shade(b.coat, 0.6)
