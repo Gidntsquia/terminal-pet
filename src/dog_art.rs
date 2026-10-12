@@ -997,32 +997,188 @@ fn draw_sit_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
     }
 }
 
+// ------------------------------------------------------------ the seated head, anywhere
+
+/// One head, drawn alone: cells relative to the head's centre cell.
+type Sprite = Vec<(i32, i32, Cell)>;
+
+#[cfg(test)]
+thread_local! {
+    /// Screen cells of every head pasted since the last clear (tests measure them).
+    pub(crate) static PASTED: std::cell::RefCell<Vec<(i32, i32, Cell)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The seated head on its own (tests compare every pose's head with it).
+#[cfg(test)]
+pub(crate) fn seated_head(body: &Body, w: u16, h: u16, side: bool) -> Vec<(i32, i32, Cell)> {
+    head_sprite(body, w, h, false, side, 1.0)
+}
+
+/// The seated dog's head drawn on its own at the seated size, as cells relative to its
+/// centre, so every pose pastes exactly the seated head: the same rows and columns, eyes,
+/// blush, nose, ears and markings. `side` draws the chibi profile facing `face`.
+fn head_sprite(body: &Body, w: u16, h: u16, ascii: bool, side: bool, face: f32) -> Sprite {
+    let mut b = body.clone();
+    b.dx = 0.0;
+    b.dy = 0.0;
+    b.cx = w as i32 / 2;
+    b.dpose.shake = 0.0;
+    b.dpose.look_up = 0.0;
+    b.dpose.spin = face;
+    let (_, hh) = seat_dims(w, h, body.scale);
+    let mut r = sit_rig(&b, w, h);
+    r.hu = 0.0;
+    r.hv = 0.745 * hh;
+    r.shake = 0.0;
+    let mut tmp = Canvas::new(w, h, ascii);
+    if side {
+        r.f = face;
+        draw_profile_head(&r, &mut tmp, &b, hh);
+    } else {
+        draw_sit_head(&r, &mut tmp, &b, hh);
+    }
+    let (cx, cy) = (r.ox.round() as i32, (r.oy - r.hv).round() as i32);
+    let mut out = vec![];
+    for y in 0..tmp.h as i32 {
+        for x in 0..tmp.w as i32 {
+            let c = tmp.cells[(y * tmp.w as i32 + x) as usize];
+            if c.fg.is_some() {
+                out.push((x - cx, y - cy, c));
+            }
+        }
+    }
+    out
+}
+
+/// Paste a head sprite with its centre at local (`u`, `v`) of `r`. `flip` turns it upside
+/// down (on its back); cells that would land below `floor` (local v) fold up onto it.
+fn paste(r: &Rig, cv: &mut Canvas, s: &Sprite, (u, v): (f32, f32), flip: bool, floor: f32) {
+    let x0 = (r.ox + r.f * r.sq * u).round() as i32;
+    let y0 = (r.oy - v).round() as i32;
+    let ground = (r.oy - floor).round() as i32;
+    for &(dx, dy, c) in s {
+        let Some(col) = c.fg else { continue };
+        let (y, ch) = if flip {
+            let ch = match c.ch {
+                '\u{2580}' => '\u{2584}',
+                '\u{2584}' => '\u{2580}',
+                k => k,
+            };
+            (y0 - dy, ch)
+        } else {
+            (y0 + dy, c.ch)
+        };
+        let y = y.min(ground);
+        let x = x0 + dx + r.shear(y);
+        cv.put(x, y, ch, col);
+        #[cfg(test)]
+        PASTED.with(|p| p.borrow_mut().push((x, y, Cell { ch, fg: Some(col) })));
+    }
+}
+
+/// The seated front leg's half-width (columns): every leg in every pose is this thick.
+fn seat_lw(ww: f32) -> f32 {
+    (0.05 * ww).max(1.0)
+}
+
+/// A straight piece of leg from `a` to `b` (local), as thick as the seated front leg: a
+/// cell is in when it is within `lw` columns or 0.8 rows of the line.
+fn fat_seg(
+    r: &Rig,
+    cv: &mut Canvas,
+    a: (f32, f32),
+    b: (f32, f32),
+    lw: f32,
+    paint: &dyn Fn(f32, f32, i32, i32) -> (char, Rgb),
+) {
+    let tv = 0.8;
+    let (ax, ay, bx, by) = (a.0 / lw, a.1 / tv, b.0 / lw, b.1 / tv);
+    let (dx, dy) = (bx - ax, by - ay);
+    let l2 = (dx * dx + dy * dy).max(1e-6);
+    r.fill(
+        cv,
+        (a.0.min(b.0) - lw - 1.0, a.0.max(b.0) + lw + 1.0),
+        (a.1.min(b.1) - 1.0, a.1.max(b.1) + 1.0),
+        &|u, v, x, y| {
+            let (px, py) = (u / lw - ax, v / tv - ay);
+            let t = ((px * dx + py * dy) / l2).clamp(0.0, 1.0);
+            let (ex, ey) = (px - t * dx, py - t * dy);
+            (ex * ex + ey * ey <= 1.0).then(|| paint(u, v, x, y))
+        },
+    );
+}
+
+/// The seated dog's rounded paw (5 columns by 2 rows at the seated size), centred at local
+/// (`u`, `v`); `v` should sit half way between two rows.
+fn seat_paw(r: &Rig, cv: &mut Canvas, (u, v): (f32, f32), lw: f32, c: Rgb) {
+    r.ell(cv, (u, v), (lw + 1.0, 1.0), &|_, _, _, _| ('\u{2588}', c));
+}
+
+/// A chunky leg through `pts` (local) with the seated paw at the end, toes `toe` columns
+/// forward of the last point.
+fn chunky_leg(r: &Rig, cv: &mut Canvas, pts: &[(f32, f32)], lw: f32, fur: Rgb, paw: Rgb, toe: f32) {
+    for s in pts.windows(2) {
+        fat_seg(r, cv, s[0], s[1], lw, &|_, _, _, _| ('\u{2588}', fur));
+    }
+    if let Some(&(u, v)) = pts.last() {
+        seat_paw(r, cv, (u + toe, v), lw, paw);
+    }
+}
+
+/// The seated haunch (hind thigh), the same size and shade as on the seated dog.
+fn seat_haunch(r: &Rig, cv: &mut Canvas, at: (f32, f32), d: &LieDims, dk: f32) {
+    r.ell(cv, at, (0.2 * d.ww, 0.2 * d.hh), &|u, v, x, y| {
+        let (c, col) = coat(r, u, v, x, y);
+        (c, shade(col, dk))
+    });
+}
+
 // ------------------------------------------------------------ rolling over
 
-/// The seated dog's head and body sizes, shared by every roll pose so the head never shrinks.
+/// The seated dog's sizes, shared by every roll pose so nothing shrinks: the seated head,
+/// the seated leg thickness, and a lying body about as long, nose to rump, as the seated
+/// dog is tall (in looks: a row is two columns) and as deep as the seated torso is wide.
 struct LieDims {
     ww: f32,
     hh: f32,
     hru: f32,
     hrv: f32,
+    /// Leg half-width and leg length.
+    lw: f32,
+    ll: f32,
     /// Lying body: centre column (local), half-length, half-height.
     bu: f32,
     ru: f32,
     rv: f32,
+    /// Column of the head's centre.
+    hc: f32,
+    /// How far pointed ears reach above the head centre (0 for floppy ears).
+    ear: f32,
 }
 
-fn lie_dims(w: u16, h: u16, scale: f32) -> LieDims {
+fn lie_dims(w: u16, h: u16, scale: f32, b: &Breed) -> LieDims {
     let (ww, hh) = seat_dims(w, h, scale);
     let hru = (0.42 * ww).max(4.0);
     let hrv = 0.18 * hh;
+    let ru = ((1.95 * hh - 1.3 * hru) / 2.0).max(0.4 * ww);
+    let bu = -0.625 * hru;
     LieDims {
         ww,
         hh,
         hru,
         hrv,
-        bu: -0.3 * ww,
-        ru: 0.6 * ww,
-        rv: (0.19 * hh).max(2.0),
+        lw: seat_lw(ww),
+        ll: (leg_frac(b) * 0.54 * hh).max(2.0),
+        bu,
+        ru,
+        rv: (0.16 * ww).max(2.0),
+        hc: bu + ru + 0.25 * hru,
+        ear: if b.ears_up {
+            0.55 * hrv + (0.17 * hh).max(2.0).ceil()
+        } else {
+            0.0
+        },
     }
 }
 
@@ -1051,85 +1207,43 @@ fn lie_rig<'a>(body: &Body, w: u16, h: u16, d: &LieDims, bv: f32, rv: f32) -> Ri
     r
 }
 
-/// A thick limb from `a` to `b` (local coordinates), `hw` columns either side, paw at the end.
-fn limb(r: &Rig, cv: &mut Canvas, a: (f32, f32), b: (f32, f32), hw: f32, fur: Rgb, paw: Rgb) {
-    let len = ((b.0 - a.0).powi(2) + (2.0 * (b.1 - a.1)).powi(2)).sqrt();
-    let n = (len * 1.5).max(2.0) as i32;
-    for k in 0..=n {
-        let t = k as f32 / n as f32;
-        let (u, v) = (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t);
-        let c = if t > 0.8 { paw } else { fur };
-        let mut du = -hw;
-        while du <= hw + 0.01 {
-            r.stamp(cv, u + du, v, '\u{2588}', c);
-            du += 0.5;
-        }
+/// Height of the head's centre (local v) in each lying pose.
+fn lie_head_v(pose: RollPose, d: &LieDims, k: f32) -> f32 {
+    match pose {
+        RollPose::Down => 1.1 * d.rv + d.hrv + 0.2 + 0.6 * k,
+        RollPose::SideA => d.hrv + 1.1,
+        RollPose::SideB => d.hrv + 0.5,
+        RollPose::TwistA | RollPose::TwistB => d.hrv + 0.8,
+        // upside down, pointed ears prop the head up off the grass
+        _ => (d.hrv + 0.5).max(d.ear + 0.5),
     }
 }
 
-/// The seated dog's face, drawn at (screen column, local v) with the seated head size.
-/// `flip` draws it upside down (on its back), mirrored around the head centre row.
-fn lie_head(
-    cv: &mut Canvas,
-    r: &Rig,
-    body: &Body,
-    d: &LieDims,
-    at: (f32, f32),
-    tilt: f32,
-    flip: bool,
-) {
+/// The seated dog's face at the seated size, centred at local (`hc`, `v`). `flip` draws it
+/// upside down (on its back) with the tongue flopping out of the side of the mouth.
+fn lie_head(cv: &mut Canvas, r: &Rig, body: &Body, d: &LieDims, v: f32, tilt: f32, flip: bool) {
+    let (w, h) = (cv.w as u16, cv.h as u16);
     let mut hb = body.clone();
     hb.dpose.tilt = tilt;
     hb.dpose.bark = 0.0;
-    hb.dpose.spin = r.f;
     if flip {
         hb.dpose.tongue = 0.0;
         hb.dpose.open = 0.0;
     }
-    let mut hr = Rig {
-        f: 1.0,
-        sq: 1.0,
-        shake: 0.0,
-        ..*r
-    };
-    let (sx, _) = r.xy(at.0, 0.0);
-    hr.ox = sx as f32;
-    hr.hu = 0.0;
-    hr.hv = at.1;
-    hr.hru = d.hru;
-    hr.hrv = d.hrv;
-    if !flip {
-        draw_sit_head(&hr, cv, &hb, d.hh);
-        return;
-    }
-    let mut tmp = Canvas::new(cv.w as u16, cv.h as u16, cv.ascii);
-    draw_sit_head(&hr, &mut tmp, &hb, d.hh);
-    let cy = (hr.oy - at.1).round() as i32;
-    for y in 0..tmp.h as i32 {
-        for x in 0..tmp.w as i32 {
-            let c = tmp.cells[(y * tmp.w as i32 + x) as usize];
-            if let Some(col) = c.fg {
-                let ch = match c.ch {
-                    '\u{2580}' => '\u{2584}',
-                    '\u{2584}' => '\u{2580}',
-                    k => k,
-                };
-                // ears that would hang below the crown fold flat along it instead
-                let ground = (hr.oy - (at.1 - d.hrv)).round() as i32;
-                cv.put(x, (2 * cy - y).min(ground), ch, col);
-            }
+    let s = head_sprite(&hb, w, h, cv.ascii, false, r.f);
+    // long ears may drape onto the lawn in front; upside down they fold on the grass
+    paste(r, cv, &s, (d.hc, v), flip, if flip { 0.0 } else { -6.0 });
+    if flip {
+        let mv = v + d.hrv * 0.42;
+        for k in 0..3 {
+            r.stamp(
+                cv,
+                d.hc + 0.3 * d.hru + k as f32,
+                mv + 0.6 + (k as f32 * 0.5).floor(),
+                '\u{2588}',
+                TONGUE,
+            );
         }
-    }
-    // upside down the tongue flops out of the side of the mouth
-    let mv = at.1 + d.hrv * 0.42;
-    for k in 0..3 {
-        hr.stamp(
-            cv,
-            r.f * (d.hru * 0.3 + k as f32),
-            mv + 0.6 + (k as f32 * 0.5).floor(),
-            '\u{2588}',
-            TONGUE,
-        );
     }
 }
 
@@ -1163,19 +1277,6 @@ fn lie_tail(r: &Rig, cv: &mut Canvas, p: &crate::dog::DogPose, root: (f32, f32),
     }
 }
 
-/// A jointed limb through `pts` (local coordinates), `hw` columns either side, a paw at the end.
-fn joint_limb(r: &Rig, cv: &mut Canvas, pts: &[(f32, f32)], hw: f32, fur: Rgb, paw: Rgb) {
-    for (i, s) in pts.windows(2).enumerate() {
-        let last = i + 2 == pts.len();
-        limb(r, cv, s[0], s[1], hw, fur, if last { paw } else { fur });
-    }
-    if let Some(&(u, v)) = pts.last() {
-        for k in 0..3 {
-            r.stamp(cv, u - 1.0 + k as f32, v, '\u{2588}', paw);
-        }
-    }
-}
-
 /// Body lying on its side or back: a level ellipse (the spine stays horizontal). `belly` is
 /// how much of it shows the light belly: 0 none (back toward the viewer), 1 the lower half
 /// (belly toward the viewer), 2 the upper half (belly up).
@@ -1204,8 +1305,9 @@ fn lie_torso(r: &Rig, cv: &mut Canvas, (bu, bv): (f32, f32), (ru, rv): (f32, f32
 
 /// Roll-over for `p`, as a real dog does it: down on its belly (sphinx), flat on one side
 /// with the legs out, half over, on its back with the legs bent and tucked, half over, flat
-/// on the other side, up on its feet, and sitting. Every frame uses the seated dog's head at
-/// the seated size and palette; the spine stays level while lying.
+/// on the other side, up on its feet, and sitting. Every frame is the seated dog: the
+/// seated head pasted at the seated size, a body as bulky as the seated one, and legs as
+/// thick as the seated front leg with the seated paw; the spine stays level while lying.
 fn draw_roll(cv: &mut Canvas, body: &Body, pose: RollPose, k: f32) {
     let (w, h) = (cv.w as u16, cv.h as u16);
     let body = &roll_body(body, w, h);
@@ -1213,64 +1315,52 @@ fn draw_roll(cv: &mut Canvas, body: &Body, pose: RollPose, k: f32) {
         draw_sit(cv, body);
         return;
     }
-    let d = lie_dims(w, h, body.scale);
+    if pose == RollPose::Stand {
+        draw_stand(cv, body, true);
+        return;
+    }
+    let br = &BREEDS[body.breed.min(BREEDS.len() - 1)];
+    let d = lie_dims(w, h, body.scale, br);
     let p = &body.dpose;
     let ww = d.ww;
     let wig = |ph: f32| (body.t * 9.0 + ph).sin();
-    let (bu, ru, rv) = (d.bu, d.ru, d.rv);
-    let lw = 1.0;
+    let (bu, ru, rv, lw, ll) = (d.bu, d.ru, d.rv, d.lw, d.ll);
+    let hv = lie_head_v(pose, &d, k);
+    let rump = bu - 0.62 * ru;
     match pose {
         RollPose::Down => {
-            // sphinx: belly on the grass, front legs forward, hind legs tucked, head up
+            // sphinx: belly on the grass, front legs forward under the chin, the hind leg
+            // folded under the haunch, head up
             let bv = rv + 0.2;
             let r = lie_rig(body, w, h, &d, bv, rv);
             let b = r.br;
             let paw = paw_col(b);
             lie_tail(&r, cv, p, (bu - ru + 1.0, 0.8), ww);
-            // far front leg, a column behind
-            let reach = bu + ru + d.hru + 1.0;
-            for v in [1.6, 0.6] {
-                joint_limb(
-                    &r,
-                    cv,
-                    &[(bu + 0.55 * ru, v + 0.4), (reach - 2.0, v)],
-                    lw,
-                    shade(b.coat, -0.9),
-                    shade(paw, -0.6),
-                );
-            }
-            lie_torso(&r, cv, (bu, bv), (ru, rv), 0.0);
-            // the hind leg folded under the haunch: thigh, hock flat, paw forward
-            r.ell(
-                cv,
-                (bu - 0.5 * ru, bv + 0.3),
-                (0.36 * ru, rv * 0.95),
-                &|u, v, x, y| {
-                    let (c, col) = coat(&r, u - bu, v, x, y);
-                    (c, shade(col, -0.35))
-                },
-            );
-            joint_limb(
+            let reach = d.hc + 0.25 * d.hru;
+            let far = shade(b.coat, -0.9);
+            chunky_leg(
                 &r,
                 cv,
-                &[(bu - 0.75 * ru, 0.5), (bu - 0.25 * ru, 0.5)],
+                &[(bu + 0.5 * ru, 1.5), (reach - 3.0, 1.5)],
+                lw,
+                far,
+                shade(paw, -0.6),
+                0.5,
+            );
+            lie_torso(&r, cv, (bu, bv), (ru, rv), 0.0);
+            seat_haunch(&r, cv, (rump, 0.2 * d.hh), &d, -0.5);
+            // the hind paw pokes out forward under the haunch, as on the seated dog
+            seat_paw(&r, cv, (rump + 0.2 * ww, 0.5), lw, paw);
+            chunky_leg(
+                &r,
+                cv,
+                &[(bu + 0.55 * ru, 0.5), (reach, 0.5)],
                 lw,
                 shade(b.coat, 0.15),
                 paw,
+                0.5,
             );
-            // near front leg forward along the grass
-            for v in [1.0, 0.0] {
-                joint_limb(
-                    &r,
-                    cv,
-                    &[(bu + 0.6 * ru, v + 0.4), (reach, v)],
-                    lw,
-                    shade(b.coat, 0.15),
-                    paw,
-                );
-            }
-            let hv = 1.2 * rv + d.hrv * (1.0 + 0.15 * k);
-            lie_head(cv, &r, body, &d, (bu + ru + 0.15 * d.hru, hv), 0.0, false);
+            lie_head(cv, &r, body, &d, hv, 0.0, false);
         }
         RollPose::SideA | RollPose::SideB => {
             let a = pose == RollPose::SideA;
@@ -1280,57 +1370,62 @@ fn draw_roll(cv: &mut Canvas, body: &Body, pose: RollPose, k: f32) {
             let paw = paw_col(b);
             lie_tail(&r, cv, p, (bu - ru + 1.0, 0.8), ww);
             let fur = shade(b.coat, 0.15);
+            let top = bv + rv;
             if !a {
                 // back toward the viewer: the legs lie on the far side, paws peek over
-                for (i, u0) in [0.62f32, 0.38, -0.45, -0.7].iter().enumerate() {
-                    let up = 2.0 * rv + bv - rv + 0.4 + 0.3 * wig(i as f32);
-                    r.ell(cv, (bu + u0 * ru, up), (1.6, 0.8), &|_, _, _, _| {
-                        ('\u{2588}', shade(paw, -0.4))
+                for (i, u0) in [0.62f32, 0.36, -0.42, -0.68].iter().enumerate() {
+                    let u = bu + u0 * ru;
+                    let up = top + 0.5 + (0.6 * wig(i as f32)).round();
+                    fat_seg(&r, cv, (u, top - 2.0), (u + 1.0, up), lw, &|_, _, _, _| {
+                        ('\u{2588}', shade(b.coat, -0.6))
                     });
+                    seat_paw(&r, cv, (u + 1.5, up), lw, shade(paw, -0.4));
                 }
             }
             lie_torso(&r, cv, (bu, bv), (ru, rv), if a { 0.55 } else { 0.0 });
             if a {
+                seat_haunch(&r, cv, (rump, bv), &d, -0.5);
                 // belly toward the viewer: all four legs out on the grass in front of it,
                 // loosely bent, front legs toward the head, hind legs toward the tail
-                let s = |i: f32| 0.4 * wig(i * 1.7);
-                let fl = |u0: f32, dir: f32, i: f32| {
-                    [
-                        (u0, bv - 0.3 * rv),
-                        (u0 + dir * (0.1 * ww) + s(i), 0.0),
-                        (u0 + dir * (0.2 * ww) + s(i), -2.2),
-                    ]
-                };
-                joint_limb(&r, cv, &fl(bu + 0.25 * ru, 1.0, 0.0), lw, fur, paw);
-                joint_limb(&r, cv, &fl(bu + 0.02 * ru, 1.0, 1.0), lw, fur, paw);
-                // hind legs: thigh forward to the knee, then back to the paw
-                for (i, u0) in [-0.4f32, -0.65].iter().enumerate() {
+                let s = |i: f32| 0.5 * wig(i * 1.7);
+                let low = (bv - 0.4 * ll).min(-1.5);
+                for (i, u0) in [0.5f32, 0.22].iter().enumerate() {
                     let u0 = bu + u0 * ru;
-                    joint_limb(
+                    let o = s(i as f32);
+                    chunky_leg(
                         &r,
                         cv,
                         &[
-                            (u0, bv - 0.2 * rv),
-                            (u0 + 0.08 * ww, 0.2),
-                            (u0 - 0.1 * ww + s(i as f32 + 2.0), -2.2),
+                            (u0, bv - 0.3 * rv),
+                            (u0 + 0.5 * ll + o, 0.5 * (bv + low)),
+                            (u0 + 1.1 * ll + o, low),
                         ],
                         lw,
                         fur,
                         paw,
+                        0.8,
+                    );
+                }
+                for (i, u0) in [-0.55f32, -0.78].iter().enumerate() {
+                    let u0 = bu + u0 * ru;
+                    let o = s(i as f32 + 2.0);
+                    chunky_leg(
+                        &r,
+                        cv,
+                        &[
+                            (u0, bv - 0.3 * rv),
+                            (u0 + 0.6 * ll, 0.6 * (bv + low)),
+                            (u0 - 0.2 * ll + o, low),
+                        ],
+                        lw,
+                        fur,
+                        paw,
+                        -0.8,
                     );
                 }
             }
             // head lying on the grass at the front, turned on its side
-            let hu = bu + ru + 0.45 * d.hru;
-            lie_head(
-                cv,
-                &r,
-                body,
-                &d,
-                (hu, d.hrv + 0.6 + if a { 0.6 } else { 0.0 }),
-                if a { 0.8 } else { -0.8 },
-                false,
-            );
+            lie_head(cv, &r, body, &d, hv, if a { 0.8 } else { -0.8 }, false);
         }
         RollPose::TwistA | RollPose::TwistB => {
             // half way over: belly turning up, legs bent and tucked against it
@@ -1343,38 +1438,40 @@ fn draw_roll(cv: &mut Canvas, body: &Body, pose: RollPose, k: f32) {
             let top = bv + rv;
             let fur = shade(b.coat, if a { 0.15 } else { -0.6 });
             let pc = if a { paw } else { shade(paw, -0.4) };
+            let fold = 0.5 * ll;
             let legs = |cv: &mut Canvas| {
                 // front legs folded toward the chest, hind legs bent at the hock
-                for (i, u0) in [0.55f32, 0.35].iter().enumerate() {
+                for (i, u0) in [0.5f32, 0.25].iter().enumerate() {
                     let u0 = bu + u0 * ru;
-                    let o = i as f32;
-                    joint_limb(
+                    let o = 2.0 * i as f32;
+                    chunky_leg(
                         &r,
                         cv,
-                        &[
-                            (u0, top - 2.5),
-                            (u0 + 2.5 + o, top + 0.8),
-                            (u0 + 0.5 + o, top + 1.4),
-                        ],
+                        &[(u0, top - 2.0), (u0 + 2.0 + o, top + fold)],
                         lw,
                         fur,
                         pc,
+                        -1.5,
                     );
                 }
-                for (i, u0) in [-0.4f32, -0.62].iter().enumerate() {
+                seat_haunch(
+                    &r,
+                    cv,
+                    (rump, top - 0.1 * d.hh),
+                    &d,
+                    if a { -0.5 } else { -1.0 },
+                );
+                for (i, u0) in [-0.55f32, -0.75].iter().enumerate() {
                     let u0 = bu + u0 * ru;
-                    let o = i as f32;
-                    joint_limb(
+                    let o = 2.0 * i as f32;
+                    chunky_leg(
                         &r,
                         cv,
-                        &[
-                            (u0, top - 2.5),
-                            (u0 + 2.0, top + 1.2),
-                            (u0 - 2.5 - o, top + 1.6),
-                        ],
-                        lw + 0.5 * (1 - i) as f32,
+                        &[(u0 + 2.0, top + 0.5), (u0 + 4.0 - o, top + fold + 0.5)],
+                        lw,
                         fur,
                         pc,
+                        -1.5,
                     );
                 }
             };
@@ -1385,73 +1482,47 @@ fn draw_roll(cv: &mut Canvas, body: &Body, pose: RollPose, k: f32) {
             if a {
                 legs(cv);
             }
-            // head rolling with the body
-            let hu = bu + ru + 0.5 * d.hru;
-            lie_head(
-                cv,
-                &r,
-                body,
-                &d,
-                (hu, d.hrv + 0.8),
-                if a { 1.3 } else { -1.3 },
-                false,
-            );
+            lie_head(cv, &r, body, &d, hv, if a { 1.3 } else { -1.3 }, false);
         }
         RollPose::Back => {
-            let rv = rv * 0.95;
             let bv = rv + 0.2;
             let r = lie_rig(body, w, h, &d, bv, rv);
             let b = r.br;
             let paw = paw_col(b);
-            // tail out to one side on the grass
             lie_tail(&r, cv, p, (bu - ru + 1.0, 0.8), ww);
             let top = bv + rv;
             let far = shade(b.coat, -0.6);
             let fur = shade(b.coat, 0.15);
-            let s = |i: f32| 0.5 * wig(i * 1.9);
-            // far legs first, a column behind
-            let front = |u0: f32, i: f32| {
-                // upper arm up from the shoulder, forearm folded back down onto the chest
-                [
-                    (u0, top - 1.5),
-                    (u0 + 2.0, top + 2.3 + 0.3 * s(i)),
-                    (u0 - 1.0 + s(i), top + 0.8),
-                ]
+            let s = |i: f32| (0.5 * wig(i * 1.9)).round();
+            let fold = (0.5 * ll).max(2.0);
+            // forelegs: upper arm up from the chest, forearm folded back, paw curled
+            let front = |cv: &mut Canvas, u0: f32, i: f32, fur: Rgb, pc: Rgb| {
+                let knee = (u0 + 2.0, top + fold + s(i));
+                chunky_leg(&r, cv, &[(u0, top - 1.0), knee], lw, fur, pc, -2.0);
             };
-            let hind = |u0: f32, out: f32, i: f32| {
-                // thigh up and forward to the knee, bent at the hock, paw splayed back
-                [
-                    (u0, top - 1.5),
-                    (u0 + 2.5, top + 2.0),
-                    (u0 - 2.5 - out + s(i), top + 2.4 + 0.3 * s(i + 1.0)),
-                ]
+            // hind legs: the thigh (the seated haunch) up, shin bent back toward the tail
+            let hind = |cv: &mut Canvas, u0: f32, i: f32, fur: Rgb, pc: Rgb, dk: f32| {
+                seat_haunch(&r, cv, (u0, top), &d, dk);
+                let knee = (u0 + 2.0, top + 0.1 * d.hh + 1.5);
+                chunky_leg(
+                    &r,
+                    cv,
+                    &[knee, (u0 - 0.6 * ll, top + fold + 1.0 + s(i))],
+                    lw,
+                    fur,
+                    pc,
+                    -0.8,
+                );
             };
-            joint_limb(
-                &r,
-                cv,
-                &front(bu + 0.68 * ru, 0.0),
-                lw,
-                far,
-                shade(paw, -0.4),
-            );
-            joint_limb(
-                &r,
-                cv,
-                &hind(bu - 0.35 * ru, -1.0, 1.0),
-                lw,
-                far,
-                shade(paw, -0.4),
-            );
+            front(cv, bu + 0.7 * ru, 0.0, far, shade(paw, -0.4));
+            hind(cv, rump + 3.0, 1.0, far, shade(paw, -0.4), -1.0);
             lie_torso(&r, cv, (bu, bv), (ru, rv), 1.9);
-            joint_limb(&r, cv, &front(bu + 0.52 * ru, 2.0), lw, fur, paw);
-            joint_limb(&r, cv, &hind(bu - 0.55 * ru, 1.5, 3.0), lw + 0.5, fur, paw);
+            front(cv, bu + 0.45 * ru, 2.0, fur, paw);
+            hind(cv, rump, 3.0, fur, paw, -0.5);
             // head tilted back on the grass, upside down, tongue out
-            let ear = if b.ears_up { 0.17 * d.hh } else { 0.0 };
-            let hv = (0.55 * d.hrv + ear + 0.5).max(d.hrv * 0.9 + 0.5);
-            lie_head(cv, &r, body, &d, (bu + ru + 0.55 * d.hru, hv), 0.0, true);
+            lie_head(cv, &r, body, &d, hv, 0.0, true);
         }
-        RollPose::Stand => draw_stand(cv, body, true),
-        RollPose::Sit => draw_sit(cv, body),
+        RollPose::Stand | RollPose::Sit => {}
     }
 }
 
@@ -1495,9 +1566,9 @@ fn roll_body_full(body: &Body, w: u16, h: u16) -> Body {
 /// Screen columns the roll pose covers (left, right) relative to the dog's centre column,
 /// so the lying dog can be kept clear of the doghouse.
 fn roll_extent(w: u16, h: u16, scale: f32, face: f32) -> (f32, f32) {
-    let d = lie_dims(w, h, scale);
+    let d = lie_dims(w, h, scale, &BREEDS[0]);
     let back = d.bu - d.ru - 0.32 * d.ww - 1.0;
-    let front = (d.bu + d.ru + 0.55 * d.hru + d.hru * 1.35).max(0.3 * d.ww + 0.42 * d.ww + 2.0);
+    let front = (d.hc + d.hru * 1.35).max(0.29 * d.ww + d.hru + 3.0);
     if face > 0.0 {
         (back, front)
     } else {
@@ -1518,24 +1589,21 @@ pub fn leg_frac(b: &Breed) -> f32 {
 }
 
 /// The standing dog is the seated dog on its feet: the same head at the same size and
-/// height. Local `u` runs forward (columns), `v` up from the grass (rows). The body is about
-/// 1.3 head-widths long; `ll` is the leg length below the chest, `vb`/`rv` the body's middle
-/// and half-depth at the chest, so the withers sit at `vb + rv`.
+/// height, a body as long as the seated dog is wide (haunch to haunch) and legs as thick as
+/// the seated front leg. Local `u` runs forward (columns), `v` up from the grass (rows);
+/// `ll` is the leg length below the chest, `vb`/`rv` the body's middle and half-depth at
+/// the chest, so the withers sit at `vb + rv`.
 fn stand_rig<'a>(body: &Body, w: u16, h: u16) -> Rig<'a> {
     let mut r = Rig::new(body, w, h);
     let (ww, hh) = seat_dims(w, h, body.scale);
     let p = &body.dpose;
     let hru = (0.42 * ww).max(4.0);
     let hrv = 0.18 * hh;
-    // chibi like the seated dog: a big round head on a small, round body with stubby legs
+    // chibi like the seated dog: a big round head on a round body with stubby legs
     let withers = 0.54 * hh;
     let ll = (leg_frac(r.br) * withers).max(2.0);
-    let ru = hru
-        * if r.br.pat == Pat::Dachshund {
-            1.35
-        } else {
-            1.0
-        };
+    // as long as the seated dog is wide across the haunches, for every breed
+    let ru = 0.46 * ww;
     r.m = ru / 0.42;
     r.ru = ru;
     r.ll = ll;
@@ -1547,7 +1615,7 @@ fn stand_rig<'a>(body: &Body, w: u16, h: u16) -> Rig<'a> {
     let hd = p.head_down.max(0.5 * p.crouch);
     let low = hrv * 0.95 + 0.5;
     r.hv = hv0 + p.look_up * 0.03 * hh - hd * (hv0 - low);
-    r.hu = 0.62 * ru + hd * 0.25 * hru;
+    r.hu = 0.6 * ru + hd * 0.25 * hru;
     // a bouncy, happy step: the body and head rise twice per stride, paws stay down
     if p.walking || p.running {
         let amp = if p.running { 1.0 } else { 0.7 };
@@ -1565,66 +1633,18 @@ fn profile(p: &crate::dog::DogPose) -> bool {
     p.walking || p.running || p.spin.abs() < 0.999
 }
 
-/// Half-width of the profile skull (columns).
-fn skull_ru(r: &Rig) -> f32 {
-    0.88 * r.hru
-}
-
-/// How far the profile muzzle reaches past the skull (columns, at least 2).
-fn muzzle_len(r: &Rig) -> f32 {
-    (0.14 * r.hru).max(2.0)
-}
-
-/// Rows (top, bottom) of the profile muzzle in local `v`.
-fn muzzle_rows(r: &Rig) -> (f32, f32) {
-    let top = r.hv - 0.18 * r.hrv;
-    let bot = (r.hv - 0.78 * r.hrv).min(top - 2.0);
-    (top, bot)
+/// The profile snout, relative to the head centre: (centre u, centre v, half-width,
+/// half-height). It is the seated muzzle seen from the side, poking `1–2` columns past the
+/// round head.
+fn snout(r: &Rig) -> (f32, f32, f32, f32) {
+    let (mru, mrv) = (r.hru * 0.38, (r.hrv * 0.36).max(1.0));
+    let tip = r.hru + 1.6;
+    (tip - mru, -0.42 * r.hrv, mru, mrv)
 }
 
 fn smooth(a: f32, b: f32, x: f32) -> f32 {
     let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
-}
-
-/// A straight run of cells from `a` to `b` (local), `hw` columns either side of the line.
-fn seg(r: &Rig, cv: &mut Canvas, a: (f32, f32), b: (f32, f32), hw: f32, c: &dyn Fn(f32) -> Rgb) {
-    let len = ((b.0 - a.0).powi(2) + (2.0 * (b.1 - a.1)).powi(2)).sqrt();
-    let n = (len * 1.5).max(2.0) as i32;
-    for k in 0..=n {
-        let t = k as f32 / n as f32;
-        let (u, v) = (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t);
-        let mut du = -hw;
-        while du <= hw + 0.01 {
-            r.stamp(cv, u + du, v, '\u{2588}', c(v));
-            du += 0.5;
-        }
-    }
-}
-
-/// A run of cells from `a` to `b` (local) whose half-width goes from `hw.0` to `hw.1`.
-fn taper(
-    r: &Rig,
-    cv: &mut Canvas,
-    a: (f32, f32),
-    b: (f32, f32),
-    hw: (f32, f32),
-    paint: &dyn Fn(f32, f32, i32, i32) -> (char, Rgb),
-) {
-    let len = ((b.0 - a.0).powi(2) + (2.0 * (b.1 - a.1)).powi(2)).sqrt();
-    let n = (len * 1.5).max(2.0) as i32;
-    for k in 0..=n {
-        let t = k as f32 / n as f32;
-        let (u, v) = (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t);
-        let w = hw.0 + (hw.1 - hw.0) * t;
-        let mut du = -w;
-        while du <= w + 0.01 {
-            let (x, y) = r.xy(u + du, v);
-            let (c, col) = paint(u + du, v, x, y);
-            r.stamp(cv, u + du, v, c, col);
-            du += 0.5;
-        }
-    }
 }
 
 /// Socks: breeds with white feet get light lower legs.
@@ -1635,10 +1655,21 @@ fn socks(b: &Breed) -> bool {
     )
 }
 
+/// Colour of the far legs in profile (darker, behind the body).
+pub(crate) fn far_leg(b: &Breed) -> Rgb {
+    shade(b.coat, -1.1)
+}
+
+/// Colour of the far paws in profile.
+pub(crate) fn far_paw(b: &Breed) -> Rgb {
+    shade(paw_col(b), -0.9)
+}
+
 /// One leg in profile, jointed: the front leg runs from the shoulder past the elbow, nearly
-/// straight down with a slight bend at the wrist; the hind leg from the hip forward to the
-/// knee, back to the hock, then down. Both end in a paw pointing forward. `ph` is the walk
-/// phase; walking swings the leg from its top joint and lifts the paw on the way forward.
+/// straight down with a slight bend at the wrist; the hind leg is the seated haunch with
+/// the shin going back to the hock, then down. Every leg is as thick as the seated front
+/// leg and ends in the seated paw, toes forward. `ph` is the walk phase; walking swings the
+/// leg from its top joint and lifts the paw on the way forward.
 fn stand_leg(
     r: &Rig,
     cv: &mut Canvas,
@@ -1651,6 +1682,8 @@ fn stand_leg(
     let b = r.br;
     let l = r.ll;
     let d = 2.0 * r.rv;
+    // the seated width and height, from the seated head this rig carries
+    let (ww, hh) = (r.hru.max(4.0) / 0.42, r.hrv / 0.18);
     let moving = p.running || p.walking;
     let amp = if p.running {
         0.55
@@ -1700,64 +1733,49 @@ fn stand_leg(
     for k in q.iter_mut() {
         k.1 -= floor;
     }
-    let fur = if far {
-        shade(b.coat, -1.1)
-    } else {
-        shade(b.coat, 0.15)
-    };
+    let fur = if far { far_leg(b) } else { shade(b.coat, 0.15) };
     let sock = socks(b);
-    let lower = |v: f32| -> Rgb {
+    let lower = move |v: f32| -> Rgb {
         if sock && v < 0.45 * l {
             if far { shade(b.light, -0.9) } else { b.light }
         } else {
             fur
         }
     };
-    let top = |_: f32| fur;
-    let lw = if far { 1.0 } else { 1.5 };
-    if front {
-        // the upper leg is hidden in the body
-        seg(r, cv, q[0], q[1], 1.5, &top);
-        seg(r, cv, q[1], q[2], lw, &lower);
-    } else {
-        // the hind leg is as chunky as the seated dog's haunch: a wide, shaded thigh down
-        // to the knee, then a thick shin tapering to the hock
-        let thick = 0.55 * r.ru * if far { 0.75 } else { 1.0 };
+    let lw = seat_lw(ww);
+    let leg = |_: f32, v: f32, _: i32, _: i32| ('\u{2588}', lower(v));
+    if !front {
+        // the seated haunch at the hip, its top at the withers
         let dk = if far { -1.1 } else { -0.5 };
-        let thigh = |u: f32, v: f32, x: i32, y: i32| {
+        let (hu, hv) = (q[0].0, (l + d - 0.2 * hh).max(0.2 * hh));
+        r.ell(cv, (hu, hv), (0.2 * ww, 0.2 * hh), &|u, v, x, y| {
             let (c, col) = coat(r, u, v, x, y);
             (c, shade(col, dk))
-        };
-        // a round haunch at the hip, as on the seated dog
-        r.ell(cv, q[0], (thick, 0.45 * thick), &thigh);
-        taper(r, cv, q[0], q[1], (thick, lw + 1.0), &thigh);
-        taper(r, cv, q[1], q[2], (lw + 1.0, lw + 0.5), &|_, v, _, _| {
-            ('\u{2588}', lower(v))
         });
-    }
-    let lw = if front { lw } else { lw + 0.5 };
-    seg(r, cv, q[2], q[3], lw, &lower);
-    // paw: three columns, toes forward
-    let pc = if far {
-        shade(paw_col(b), -0.9)
     } else {
-        paw_col(b)
-    };
-    let (pu, pv) = q[3];
-    for k in 0..5 {
-        r.stamp(cv, pu - 1.5 + k as f32 * 0.9, pv, '\u{2588}', pc);
+        // the upper leg is mostly hidden in the body
+        fat_seg(r, cv, q[0], q[1], lw, &leg);
     }
+    fat_seg(r, cv, q[1], q[2], lw, &leg);
+    fat_seg(r, cv, q[2], q[3], lw, &leg);
+    // the seated paw: two rows on the grass, toes forward
+    let pc = if far { far_paw(b) } else { paw_col(b) };
+    let (pu, pv) = q[3];
+    seat_paw(r, cv, (pu + 0.6, pv + 0.5), lw, pc);
     if b.pat == Pat::Poodle {
-        // pompoms at the ankle and the paw
+        // pompoms at the ankle
         let pom = if far { shade(b.light, -0.6) } else { b.light };
-        r.ell(cv, (q[2].0, q[2].1 * 0.6), (1.6, 0.9), &|_, _, x, y| {
-            (if (x + y) % 2 == 0 { '@' } else { '\u{2588}' }, pom)
-        });
+        r.ell(
+            cv,
+            (q[2].0, q[2].1 * 0.6 + 1.0),
+            (lw + 1.0, 1.0),
+            &|_, _, x, y| (if (x + y) % 2 == 0 { '@' } else { '\u{2588}' }, pom),
+        );
     }
 }
 
 /// Body in profile: chest deeper than the belly (the belly line rises toward the hind legs),
-/// the back sloping a little down to the tail, round at both ends, and the hind thigh.
+/// the back sloping a little down to the tail, round at both ends.
 fn stand_body(r: &Rig, cv: &mut Canvas) {
     let (ll, d, ru) = (r.ll, 2.0 * r.rv, r.ru);
     let wh = ll + d;
@@ -1798,72 +1816,63 @@ fn stand_body(r: &Rig, cv: &mut Canvas) {
     });
 }
 
-/// The standing head: the seated face (front view), or the head in profile.
-fn draw_stand_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32, side: bool) {
-    if !side {
-        let (sx, _) = r.xy(r.hu, 0.0);
-        let hr = Rig {
-            f: 1.0,
-            sq: 1.0,
-            hu: 0.0,
-            ox: sx as f32,
-            ..*r
-        };
-        draw_sit_head(&hr, cv, body, hh);
-        return;
+/// The standing head: the seated head pasted at its seated size, facing the viewer, or the
+/// chibi profile on a short neck.
+fn draw_stand_head(r: &Rig, cv: &mut Canvas, body: &Body, side: bool) {
+    let (w, h) = (cv.w as u16, cv.h as u16);
+    if side {
+        // neck: from the withers up into the back of the head
+        let (nu0, nv0) = (0.5 * r.ru, r.vb + 0.4 * r.rv);
+        let (nu1, nv1) = (r.hu - 0.3 * r.hru, r.hv - 0.35 * r.hrv);
+        for k in 0..=6 {
+            let a = k as f32 / 6.0;
+            r.ell(
+                cv,
+                (nu0 + (nu1 - nu0) * a, nv0 + (nv1 - nv0) * a),
+                (0.3 * r.ru, (0.4 * r.rv).max(1.5)),
+                &|u, v, x, y| coat(r, u, v.min(r.vb + r.rv), x, y),
+            );
+        }
     }
-    draw_profile_head(r, cv, body, hh);
+    let s = head_sprite(body, w, h, cv.ascii, side, r.f);
+    let u = r.hu;
+    let r1 = Rig { sq: 1.0, ..*r };
+    paste(&r1, cv, &s, (u * r.sq, r.hv), false, -100.0);
 }
 
-/// A dog's head seen from the side: round skull, a muzzle sticking out toward the travel
-/// direction and ending in a dark nose, one shiny eye, one ear at the back, a mouth line.
-/// Same height as the seated head.
+/// The chibi head in profile, drawn on the seated rig (`hu`, `hv`, `f` set by the caller):
+/// the seated round head and colouring, the seated muzzle seen from the side as a short
+/// snout poking 1–2 columns past the head and ending in the small dark nose, one seated eye
+/// with its white shine, the blush, and one seated ear (floppy or upright, same size).
 fn draw_profile_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
     let b = r.br;
     let p = &body.dpose;
-    let (hu, hv, hrv) = (r.hu, r.hv, r.hrv);
-    let su = skull_ru(r);
-    let ml = muzzle_len(r);
-    let tip = hu + su + ml;
-    let (mt, mb) = muzzle_rows(r);
+    let (hu, hv, hru, hrv) = (r.hu, r.hv, r.hru, r.hrv);
     let ear_c = shade(b.dark, -0.8);
-    let ascii = cv.ascii;
-    let up_ear = |cv: &mut Canvas, back: f32, c: Rgb| {
+    let up_ear = |cv: &mut Canvas, eu: f32, c: Rgb| {
+        // the seated pointed ear, leaning back a little
         let eh = (0.17 * hh).max(2.0);
-        let eu = hu - back * su;
         let n = eh.ceil() as i32;
         for i in 0..n {
-            let wd = ((n - i) as f32 / n as f32 * (su * 0.45).max(1.5)).max(1.0);
-            let lean = p.tilt * i as f32 * 0.3 - 0.25 * i as f32;
+            let wd = ((n - i) as f32 / n as f32 * (hru * 0.45).max(1.5)).max(1.0);
+            let lean = p.tilt * i as f32 * 0.3 - 0.2 * i as f32;
             r.fill(
                 cv,
                 (eu - wd + lean, eu + wd + lean),
                 (
-                    hv + hrv * 0.6 + i as f32 - 0.5,
-                    hv + hrv * 0.6 + i as f32 + 0.5,
+                    hv + hrv * 0.55 + i as f32 - 0.5,
+                    hv + hrv * 0.55 + i as f32 + 0.5,
                 ),
                 &|u, _, _, _| ((u - eu - lean).abs() <= wd * 0.5 + 0.4).then_some(('\u{2593}', c)),
             );
         }
     };
-    // far ear peeks up behind the near one
+    // the far ear peeks up behind
     if b.ears_up {
-        up_ear(cv, 0.05, shade(ear_c, -0.5));
+        up_ear(cv, hu + 0.2 * hru, shade(ear_c, -0.6));
     }
-    // neck: from the withers up into the back of the skull
-    let (nu0, nv0) = (0.55 * r.ru, r.vb + 0.4 * r.rv);
-    let (nu1, nv1) = (hu - 0.3 * su, hv - 0.35 * hrv);
-    for k in 0..=6 {
-        let a = k as f32 / 6.0;
-        r.ell(
-            cv,
-            (nu0 + (nu1 - nu0) * a, nv0 + (nv1 - nv0) * a),
-            (0.3 * r.ru, (0.4 * r.rv).max(1.5)),
-            &|u, v, x, y| coat(r, u, v.min(r.vb + r.rv), x, y),
-        );
-    }
-    // skull
-    r.ell(cv, (hu, hv), (su, hrv), &|_, v, x, y| {
+    // the seated round head
+    r.ell(cv, (hu, hv), (hru, hrv), &|_, v, x, y| {
         let rel = ((v - hv) / hrv).clamp(-1.0, 1.0);
         match b.pat {
             Pat::Husky => {
@@ -1880,71 +1889,45 @@ fn draw_profile_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
     if b.pat == Pat::Poodle {
         r.ell(
             cv,
-            (hu - 0.15 * su, hv + hrv * 0.9),
-            (su * 0.7, hrv * 0.5),
+            (hu - 0.1 * hru, hv + hrv * 0.9),
+            (hru * 0.6, hrv * 0.5),
             &|_, _, x, y| (if (x + y) % 2 == 0 { '@' } else { '\u{2588}' }, b.light),
         );
     }
     if b.pat == Pat::Dalmatian {
-        r.stamp(cv, hu - su * 0.3, hv + hrv * 0.5, '\u{25cf}', b.dark);
+        r.stamp(cv, hu - hru * 0.25, hv + hrv * 0.4, '\u{25cf}', b.dark);
     }
-    // muzzle: a block reaching past the skull, the lower front corner rounded off
+    // the seated muzzle, seen from the side
     let muz = if b.pat == Pat::Shepherd {
         b.dark
     } else {
         b.light
     };
-    let open = p.open > 0.15 || p.tongue > 0.3;
-    // a short round snout like the seated dog's: an ellipse from the cheek past the skull
-    let mu0 = hu + 0.42 * su;
-    let (mcu, mcv) = ((mu0 + tip) / 2.0, (mt + mb) / 2.0);
-    let (mru, mrv) = ((tip - mu0) / 2.0 + 0.5, (mt - mb) / 2.0 + 0.6);
-    r.fill(
-        cv,
-        (mu0 - 1.0, tip + 1.0),
-        (mb - 1.0, mt + 1.0),
-        &|u, v, _, _| {
-            let (a, b) = ((u - mcu) / mru, (v - mcv) / mrv);
-            (a * a + b * b <= 1.05).then_some(('\u{2588}', muz))
-        },
-    );
-    // mouth line along the lower jaw: the dark top half of '▄' cells; open, a dark gap
+    let (mcu, mcv, mru, mrv) = snout(r);
+    let (mu, mv) = (hu + mcu, hv + mcv);
+    r.ell(cv, (mu, mv), (mru, mrv), &|_, _, _, _| ('\u{2588}', muz));
+    let tip = mu + mru;
+    // mouth: a short line under the snout; open, a dark grin with the tongue out
     let mouth = (0x70, 0x20, 0x30);
-    let mrow = mb + 1.0;
-    let mut u = mu0 + 0.3 * su;
-    while u <= tip - 1.5 {
-        if open {
-            r.stamp(cv, u, mrow - 1.0, '\u{2588}', mouth);
-        } else {
-            r.stamp(cv, u, mrow - 1.0, if ascii { '_' } else { '\u{2584}' }, muz);
-        }
-        u += 1.0;
-    }
-    if open {
-        // the corner of the mouth turns up into a grin
-        r.stamp(cv, mu0 + 0.3 * su - 1.0, mrow, '\u{2588}', mouth);
-        // chin dropped a row, tongue hanging out of the side
-        let mut u = mu0 + 0.2 * su;
-        while u <= tip - 2.5 {
-            r.stamp(cv, u, mb - 1.0, '\u{2588}', muz);
-            u += 1.0;
+    let low = mv - mrv + 0.2;
+    if p.open > 0.15 || p.tongue > 0.3 {
+        for k in 0..3 {
+            r.stamp(cv, tip - 1.5 - k as f32, low, '\u{2584}', mouth);
         }
         if p.tongue > 0.3 {
-            r.stamp(cv, tip - 4.0, mb - 1.0, '\u{2588}', TONGUE);
-            r.stamp(cv, tip - 3.0, mb - 1.0, '\u{2588}', TONGUE);
-            r.stamp(cv, tip - 3.5, mb - 2.0, '\u{2588}', TONGUE);
+            r.stamp(cv, tip - 2.5, low - 1.0, '\u{2588}', TONGUE);
+            r.stamp(cv, tip - 3.5, low - 1.0, '\u{2588}', TONGUE);
         }
+    } else if !cv.ascii {
+        r.stamp(cv, tip - 2.0, low + 0.6, '\u{2581}', mouth);
     }
-    // the nose: dark, at the top of the muzzle tip and one column past it ('▇' is left
-    // alone by the soft edge pass)
-    let nose = if ascii { '#' } else { '\u{2587}' };
-    let nc = lerp(b.nose, (0x60, 0x50, 0x54), 0.45);
-    for k in 0..2 {
-        r.stamp(cv, tip - k as f32, mt, nose, nc);
-    }
-    r.stamp(cv, tip, mt - 1.0, nose, nc);
-    // one big shiny eye and a rosy cheek
-    let (eu, ev) = (hu + 0.3 * su, hv + 0.15 * hrv);
+    // the small dark nose at the top of the snout tip ('▇' is left alone by the edge pass)
+    let nose = if cv.ascii { '#' } else { '\u{2587}' };
+    let nv = mv + mrv * 0.55;
+    r.stamp(cv, tip - 0.4, nv, nose, b.nose);
+    r.stamp(cv, tip - 1.4, nv, nose, b.nose);
+    // the seated eye with its white shine, and the blush below and behind it
+    let (eu, ev) = (hu + 0.42 * hru, hv + 0.12 * hrv);
     let dark = (0x18, 0x12, 0x14);
     if body.closed || body.blink {
         r.stamp(cv, eu - 0.5, ev, '\u{2580}', dark);
@@ -1955,34 +1938,47 @@ fn draw_profile_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
         } else {
             dark
         };
-        let (eru, erv) = ((0.11 * r.hru).max(1.0), (0.13 * hrv).max(1.0));
+        let (eru, erv) = ((0.11 * hru).max(1.0), (0.13 * hrv).max(1.0));
         r.ell(cv, (eu, ev), (eru, erv), &|_, _, _, _| ('\u{2588}', iris));
-        r.stamp(cv, eu - 0.4, ev + erv * 0.6, '\u{25cf}', (255, 255, 255));
+        r.stamp(
+            cv,
+            eu - 0.4 * r.f,
+            ev + erv * 0.6,
+            '\u{25cf}',
+            (255, 255, 255),
+        );
     }
     r.stamp(
         cv,
-        hu + 0.1 * su,
-        hv - 0.4 * hrv,
+        hu + 0.12 * hru,
+        hv - 0.3 * hrv,
         '\u{2592}',
         (0xF0, 0x90, 0xA0),
     );
-    // near ear at the back of the head
+    // the near ear at the back of the head, the seated size
     if b.ears_up {
-        up_ear(cv, 0.4, ear_c);
+        up_ear(cv, hu - 0.3 * hru, ear_c);
     } else if b.pat == Pat::Poodle {
         r.ell(
             cv,
-            (hu - 0.45 * su, hv - hrv * 0.3),
-            (su * 0.35, hrv * 0.85),
+            (hu - 0.6 * hru, hv - hrv * 0.2),
+            (hru * 0.32, hrv * 0.8),
             &|_, _, x, y| (if (x + y) % 2 == 0 { '@' } else { '\u{2588}' }, ear_c),
         );
     } else {
-        let long = if b.pat == Pat::Dachshund { 1.5 } else { 0.95 };
+        let dach = b.pat == Pat::Dachshund;
         let swing = if p.running { 0.6 * p.step.sin() } else { 0.0 };
         r.ell(
             cv,
-            (hu - 0.35 * su - swing, hv - hrv * 0.3),
-            (r.hru * 0.3, hrv * long),
+            (
+                hu - 0.62 * hru - swing,
+                hv - hrv * (if dach { 0.9 } else { 0.35 } + p.tilt * 0.2),
+            ),
+            if dach {
+                (hru * 0.34, hrv * 1.6)
+            } else {
+                (hru * 0.3, hrv * 0.95)
+            },
             &|_, _, _, _| ('\u{2593}', ear_c),
         );
     }
@@ -1991,7 +1987,7 @@ fn draw_profile_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
             r.stamp(
                 cv,
                 tip + 2.0 + 2.2 * k as f32,
-                mt - 0.5 + 0.4 * k as f32,
+                nv - 0.5 + 0.4 * k as f32,
                 ')',
                 (0xFF, 0xF0, 0xA0),
             );
@@ -2002,8 +1998,8 @@ fn draw_profile_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
 /// Where the standing dog's mouth is (local coordinates).
 fn stand_mouth(r: &Rig, p: &crate::dog::DogPose) -> (f32, f32) {
     if profile(p) {
-        let (_, mb) = muzzle_rows(r);
-        (r.hu + skull_ru(r) + muzzle_len(r) - 2.0, mb - 0.5)
+        let (mcu, mcv, mru, mrv) = snout(r);
+        (r.hu + mcu + mru - 2.0, r.hv + mcv - mrv - 0.3)
     } else {
         (r.hu, r.hv - 0.42 * r.hrv - 0.6)
     }
@@ -2034,7 +2030,6 @@ fn draw_stand(cv: &mut Canvas, body: &Body, side: bool) {
     let p = &body.dpose;
     let r = stand_rig(body, w, h);
     let m = r.m;
-    let (_, hh) = seat_dims(w, h, body.scale);
     let (uf, uh) = (0.58 * r.ru, -0.6 * r.ru);
     // front legs: dig alternates them backwards
     let dig = if p.dig > 0.0 {
@@ -2065,7 +2060,7 @@ fn draw_stand(cv: &mut Canvas, body: &Body, side: bool) {
             r.stamp(cv, u + 1.0, v, '\u{2588}', r.br.coat);
         }
     }
-    draw_stand_head(&r, cv, body, hh, side);
+    draw_stand_head(&r, cv, body, side);
     // dirt flying from the front paws
     if p.dig > 0.2 {
         for i in 0..5 {
@@ -2251,16 +2246,18 @@ pub fn mouth_pos(app: &App, body: &Body) -> (f32, f32) {
         }
         _ => {}
     }
-    if let Some((pose, _)) = body.dpose.roll_pose() {
-        let d = lie_dims(app.w, app.h, body.scale);
+    if let Some((pose, k)) = body.dpose.roll_pose() {
+        let br = &BREEDS[body.breed.min(BREEDS.len() - 1)];
+        let d = lie_dims(app.w, app.h, body.scale, br);
         let body = &roll_body(body, app.w, app.h);
         let r = lie_rig(body, app.w, app.h, &d, d.rv, d.rv);
-        let hv = if pose == RollPose::Back {
-            d.hrv
+        let hv = lie_head_v(pose, &d, k);
+        let mv = if pose == RollPose::Back {
+            hv + 0.42 * d.hrv
         } else {
-            d.hrv * 0.6
+            hv - 0.42 * d.hrv
         };
-        let (x, y) = r.xy(d.bu + d.ru + 0.3 * d.hru, hv);
+        let (x, y) = r.xy(d.hc, mv);
         return (x as f32, y as f32);
     }
     let r = stand_rig(body, app.w, app.h);

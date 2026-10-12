@@ -2015,4 +2015,367 @@ mod tests {
         h.on_msg(2, Msg::ArriveDog(3));
         assert!(h.guests.iter().any(|g| g.kind == Kind::Dog));
     }
+
+    /// Every non-seated frame is the seated chibi dog: the pasted head has the seated head's
+    /// rows and columns and shows the seated eyes (white shine) — two facing the viewer, one
+    /// in profile; the profile body is as wide as the seated body; the lying dog is about as
+    /// long, nose to rump, as the seated dog is tall (a row looks two columns tall); and the
+    /// legs are as many columns thick as the seated front leg.
+    #[test]
+    fn every_frame_is_the_seated_dog() {
+        use crate::dog_art::{PASTED, leg_frac, seat_dims, seated_head};
+        let (w, h) = (120u16, 40u16);
+        let (ww, hh) = seat_dims(w, h, 1.0);
+        let feet = crate::dog_art::ground(w, h).0;
+        let bbox = |c: &[(i32, i32, crate::art::Cell)]| {
+            let (mut x0, mut x1, mut y0, mut y1) = (i32::MAX, i32::MIN, i32::MAX, i32::MIN);
+            for &(x, y, _) in c {
+                (x0, x1, y0, y1) = (x0.min(x), x1.max(x), y0.min(y), y1.max(y));
+            }
+            (y1 - y0 + 1, x1 - x0 + 1, x1)
+        };
+        let run = |cv: &crate::art::Canvas, y: i32, x: i32| {
+            let on = |x: i32| {
+                x >= 0
+                    && (x as usize) < cv.w
+                    && cv.cells[y as usize * cv.w + x as usize].fg.is_some()
+            };
+            let (mut a, mut b) = (x, x);
+            while on(a - 1) {
+                a -= 1;
+            }
+            while on(b + 1) {
+                b += 1;
+            }
+            (a, b)
+        };
+        // the seated leg is measured on the plain golden coat (spots and patches hide it);
+        // its width does not depend on the breed
+        let mut sit_leg = 0;
+        for (breed, br) in BREEDS.iter().enumerate() {
+            let mut a = dog(w, h, 5);
+            a.init_color(breed, false);
+            let base = a.dog_host_body();
+            let cx = base.cx + base.dx.round() as i32;
+            let render = |f: &dyn Fn(&mut DogPose)| {
+                let mut body = base.clone();
+                f(&mut body.dpose);
+                body.blink = false;
+                body.closed = false;
+                PASTED.with(|p| p.borrow_mut().clear());
+                let mut cv = crate::art::Canvas::new(w, h, false);
+                crate::dog_art::draw_dog_into(&mut cv, &body, false, 0, w, h);
+                let pasted = PASTED.with(|p| p.borrow().clone());
+                (cv, pasted, body)
+            };
+            let shines = |cv: &crate::art::Canvas| {
+                cv.cells
+                    .iter()
+                    .filter(|c| c.ch == '\u{25cf}' && c.fg == Some((255, 255, 255)))
+                    .count()
+            };
+            let (front_rows, front_cols, _) = bbox(&seated_head(&base, w, h, false));
+            let (side_rows, side_cols, _) = bbox(&seated_head(&base, w, h, true));
+            // the profile snout pokes 1-2 columns past the round head (half-width hru)
+            let hru = (0.42 * ww).max(4.0);
+            let tip = seated_head(&base, w, h, true)
+                .iter()
+                .filter(|c| c.2.ch != ')')
+                .map(|c| c.0)
+                .max()
+                .unwrap();
+            let past = tip - hru.floor() as i32;
+            assert!(
+                (1..=2).contains(&past),
+                "{}: snout {past} columns past the head",
+                br.name
+            );
+            // the seated dog itself: its width across the haunches, its front leg
+            let (sit, _, _) = render(&|_| {});
+            assert_eq!(shines(&sit), 2, "{}: seated eyes", br.name);
+            let hy = (feet - 1 - (0.2 * hh).round() as i32) as usize;
+            let l = (0..sit.w)
+                .find(|&x| sit.cells[hy * sit.w + x].fg.is_some())
+                .unwrap() as i32;
+            let sit_w = 2 * (cx - l) + 1;
+            // the seated front leg (raw, before the soft edge): on a row inside the torso
+            // its cells are the one leg colour (fur speckles aside), unlike the torso around it
+            let ls = (0.14 * ww).max(2.3).round() as i32;
+            let (pa, pb) = run(&sit, feet - 1, cx - ls);
+            let sit_paw = pb - pa + 1;
+            let mut raw_sit = crate::art::Canvas::new(w, h, false);
+            crate::dog_art::draw_dog(&mut raw_sit, &base);
+            let ly = (feet - 1 - (0.36 * hh).round() as i32) as usize;
+            let at = |x: i32| raw_sit.cells[ly * raw_sit.w + x as usize];
+            let lc = at(cx - ls).fg;
+            let leg_cols: Vec<i32> = ((cx - ls - 4)..=(cx - ls + 4))
+                .filter(|&x| {
+                    at(x).fg == lc
+                        || at(x).ch == '\u{2593}' && at(x - 1).fg == lc && at(x + 1).fg == lc
+                })
+                .collect();
+            if breed == 0 {
+                sit_leg = leg_cols.len() as i32;
+                assert!(
+                    leg_cols.windows(2).all(|p| p[1] == p[0] + 1) && sit_leg >= 2,
+                    "seated leg not one run: {leg_cols:?}"
+                );
+            }
+            type Pose<'a> = (&'a str, Box<dyn Fn(&mut DogPose)>, bool);
+            let poses: Vec<Pose> = vec![
+                ("stand", Box::new(|p| p.up = true), false),
+                (
+                    "walk",
+                    Box::new(|p| {
+                        p.walking = true;
+                        p.happy_on_the_move();
+                    }),
+                    true,
+                ),
+                (
+                    "run",
+                    Box::new(|p| {
+                        p.running = true;
+                        p.step = 0.8;
+                        p.happy_on_the_move();
+                    }),
+                    true,
+                ),
+                (
+                    "carry",
+                    Box::new(|p| {
+                        p.running = true;
+                        p.step = 2.4;
+                        p.carry = 2;
+                    }),
+                    true,
+                ),
+                ("down", Box::new(|p| p.roll = 1.5), false),
+                ("sideA", Box::new(|p| p.roll = 2.5), false),
+                ("twistA", Box::new(|p| p.roll = 3.5), false),
+                ("back", Box::new(|p| p.roll = 4.5), false),
+                ("twistB", Box::new(|p| p.roll = 5.5), false),
+                ("sideB", Box::new(|p| p.roll = 6.5), false),
+                ("up", Box::new(|p| p.roll = 7.5), true),
+            ];
+            for (name, f, side) in &poses {
+                let (cv, pasted, _) = render(f.as_ref());
+                let (rows, cols, nose) = bbox(&pasted);
+                let (er, ec) = if *side {
+                    (side_rows, side_cols)
+                } else {
+                    (front_rows, front_cols)
+                };
+                eprintln!(
+                    "{} {name}: head {rows}x{cols} (seated {front_rows}x{front_cols}, profile sprite {side_rows}x{side_cols}) shines {}",
+                    br.name,
+                    shines(&cv)
+                );
+                assert!(
+                    (rows - er).abs() <= 1 && cols == ec,
+                    "{} {name}: head {rows}x{cols}, seated {er}x{ec}",
+                    br.name
+                );
+                assert!(
+                    rows >= front_rows - 1,
+                    "{} {name}: head shorter than seated",
+                    br.name
+                );
+                // every pasted head cell is still there (nothing draws over the face)
+                let kept = pasted
+                    .iter()
+                    .filter(|&&(x, y, _)| {
+                        x >= 0
+                            && y >= 0
+                            && (x as usize) < cv.w
+                            && (y as usize) < cv.h
+                            && cv.cells[y as usize * cv.w + x as usize].fg.is_some()
+                    })
+                    .count();
+                assert!(
+                    kept * 100 >= pasted.len() * 97,
+                    "{} {name}: head overdrawn",
+                    br.name
+                );
+                assert_eq!(
+                    shines(&cv),
+                    if *side { 1 } else { 2 },
+                    "{} {name}: seated eyes",
+                    br.name
+                );
+                if name.starts_with("walk") {
+                    // body width in profile, at the body's middle row
+                    let withers = 0.54 * hh;
+                    let ll = (leg_frac(br) * withers).max(2.0);
+                    let vb = ll + (withers - ll) / 2.0;
+                    let (l, r) = run(&cv, feet - 1 - vb.round() as i32, cx);
+                    let bw = r - l + 1;
+                    eprintln!("{}: profile body {bw} cols, seated {sit_w}", br.name);
+                    assert!(
+                        (bw as f32 / sit_w as f32 - 1.0).abs() <= 0.1,
+                        "{}: profile body {bw} cols, seated {sit_w}",
+                        br.name
+                    );
+                }
+                if ["down", "sideA", "twistA", "back", "twistB", "sideB"].contains(name) {
+                    let mut rump = i32::MAX;
+                    for v in 4..=9 {
+                        let y = (feet - 1 - v) as usize;
+                        for x in 0..cv.w {
+                            if cv.cells[y * cv.w + x].fg.is_some() {
+                                rump = rump.min(x as i32);
+                                break;
+                            }
+                        }
+                    }
+                    let len = nose - rump + 1;
+                    eprintln!(
+                        "{} {name}: nose to rump {len} cols, seated height {hh} rows",
+                        br.name
+                    );
+                    assert!(
+                        (len as f32 / (2.0 * hh) - 1.0).abs() <= 0.1,
+                        "{} {name}: {len} cols long, seated {hh} rows tall",
+                        br.name
+                    );
+                }
+                if *name == "stand" {
+                    // the near front leg, mid-way down, without the darker far leg behind it
+                    let ru = 0.46 * ww;
+                    let withers = 0.54 * hh;
+                    let ll = (leg_frac(br) * withers).max(2.0);
+                    let mut raw = crate::art::Canvas::new(w, h, false);
+                    let mut body = base.clone();
+                    body.dpose.up = true;
+                    crate::dog_art::draw_dog(&mut raw, &body);
+                    let y = feet - 1 - (0.45 * ll).round() as i32;
+                    let x = cx + (0.58 * ru).round() as i32;
+                    let (la, lb) = run(&raw, y, x);
+                    let far = crate::dog_art::far_leg(br);
+                    let near = (la..=lb)
+                        .filter(|&x| raw.cells[y as usize * raw.w + x as usize].fg != Some(far))
+                        .count() as i32;
+                    eprintln!("{}: near front leg {near} cols, seated {sit_leg}", br.name);
+                    assert_eq!(near, sit_leg, "{}: leg columns", br.name);
+                    // and the same paw, five columns on the grass
+                    let x = cx + (0.58 * ru + 1.2).round() as i32;
+                    let (pa, pb) = run(&raw, feet - 1, x);
+                    let paw = (pa..=pb)
+                        .filter(|&x| {
+                            raw.cells[(feet - 1) as usize * raw.w + x as usize].fg
+                                != Some(crate::dog_art::far_paw(br))
+                        })
+                        .count() as i32;
+                    eprintln!("{}: near front paw {paw} cols, seated {sit_paw}", br.name);
+                    assert_eq!(paw, sit_paw, "{}: paw columns", br.name);
+                }
+            }
+        }
+    }
+
+    /// Dev aid: `DUMP=/path BREED=0 cargo test dump_poses -- --ignored` writes the seated,
+    /// standing, walking and roll frames side by side as ANSI text for `scripts/ansi2png.py`.
+    #[test]
+    #[ignore]
+    fn dump_poses() {
+        let Ok(path) = std::env::var("DUMP") else {
+            return;
+        };
+        let breed: usize = std::env::var("BREED")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let (w, h) = (120u16, 40u16);
+        let mut a = dog(w, h, 5);
+        a.init_color(breed, false);
+        type Set = Box<dyn Fn(&mut DogPose)>;
+        let poses: Vec<(&str, Set)> = vec![
+            ("sit", Box::new(|_| {})),
+            ("stand", Box::new(|p| p.up = true)),
+            (
+                "walk0",
+                Box::new(|p| {
+                    p.walking = true;
+                    p.step = 0.0;
+                    p.happy_on_the_move();
+                }),
+            ),
+            (
+                "walk1",
+                Box::new(|p| {
+                    p.walking = true;
+                    p.step = 1.6;
+                    p.happy_on_the_move();
+                }),
+            ),
+            (
+                "run",
+                Box::new(|p| {
+                    p.running = true;
+                    p.step = 0.8;
+                    p.happy_on_the_move();
+                }),
+            ),
+            (
+                "carry",
+                Box::new(|p| {
+                    p.running = true;
+                    p.step = 2.4;
+                    p.carry = 2;
+                }),
+            ),
+            ("roll1", Box::new(|p| p.roll = 1.5)),
+            ("roll2", Box::new(|p| p.roll = 2.5)),
+            ("roll3", Box::new(|p| p.roll = 3.5)),
+            ("roll4", Box::new(|p| p.roll = 4.5)),
+            ("roll5", Box::new(|p| p.roll = 5.5)),
+            ("roll6", Box::new(|p| p.roll = 6.5)),
+            ("roll7", Box::new(|p| p.roll = 7.5)),
+        ];
+        let mut panels = vec![];
+        for (name, f) in &poses {
+            let mut body = a.dog_host_body();
+            f(&mut body.dpose);
+            let mut cv = crate::art::Canvas::new(w, h, false);
+            crate::dog_art::draw_dog_into(&mut cv, &body, false, 0, w, h);
+            let (mut x0, mut x1) = (usize::MAX, 0);
+            for y in 0..cv.h {
+                for x in 0..cv.w {
+                    if cv.cells[y * cv.w + x].fg.is_some() {
+                        (x0, x1) = (x0.min(x), x1.max(x));
+                    }
+                }
+            }
+            panels.push((name.to_string(), cv, x0, x1));
+        }
+        let mut out = String::new();
+        for row in panels.chunks(3) {
+            out.push_str(
+                &row.iter()
+                    .map(|p| format!("{:<80}", p.0))
+                    .collect::<String>(),
+            );
+            out.push('\n');
+            for y in 2..h as usize - 9 {
+                for (_, cv, x0, x1) in row {
+                    let mut n = 0;
+                    for x in *x0..=(*x1).min(*x0 + 79) {
+                        let c = cv.cells[y * cv.w + x];
+                        match c.fg {
+                            Some((r, g, b)) => {
+                                out.push_str(&format!("\x1b[38;2;{r};{g};{b}m{}\x1b[0m", c.ch))
+                            }
+                            None => out.push(' '),
+                        }
+                        n += 1;
+                    }
+                    for _ in n..80 {
+                        out.push(' ');
+                    }
+                }
+                out.push('\n');
+            }
+        }
+        std::fs::write(path, out).unwrap();
+    }
 }
