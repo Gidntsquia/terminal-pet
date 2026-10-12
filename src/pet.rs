@@ -81,6 +81,11 @@ pub trait Pet: Sync {
     fn guest_x(&self, _app: &App, _guest: Kind, x: f32) -> f32 {
         x
     }
+    /// How far (columns, right +) a guest of kind `guest` settled at `x` may drift during
+    /// a play move, given the move's `dx`, so e.g. a squid in the yard stays on the lawn.
+    fn guest_drift(&self, _app: &App, _guest: Kind, _x: f32, dx: f32) -> f32 {
+        dx
+    }
     /// Draw the background scene.
     fn draw_scene(&self, cv: &mut Canvas, app: &App);
     /// Draw one body (host or guest) with owner id `id` for hit testing.

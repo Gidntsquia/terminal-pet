@@ -897,8 +897,13 @@ impl App {
                 let pid = ctl.parts[i];
                 if pid == 0 {
                     self.fx = fx;
-                } else if let Some(gu) = self.guests.iter_mut().find(|g| g.pid == pid) {
-                    gu.fx = fx;
+                } else if let Some(gi) = self.guests.iter().position(|g| g.pid == pid) {
+                    let (kind, x) = (self.guests[gi].kind, self.guests[gi].x);
+                    let mut fx = fx;
+                    if let Some(p) = self.pet() {
+                        fx.dx = p.guest_drift(self, kind, x, fx.dx);
+                    }
+                    self.guests[gi].fx = fx;
                 }
             }
         }

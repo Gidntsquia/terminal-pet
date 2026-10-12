@@ -611,10 +611,15 @@ impl App {
             + self.dog.clear_dx
     }
 
-    /// First column the standing dog may reach on the left: past the doghouse, and past a
-    /// guest (a floating squid, a cat on the lawn) between the house and the dog.
-    fn yard_left(&self) -> f32 {
-        let mut left = (crate::dog_art::house_right(self.w, self.h) + 2) as f32;
+    /// First column clear of the doghouse.
+    fn house_left(&self) -> f32 {
+        (crate::dog_art::house_right(self.w, self.h) + 2) as f32
+    }
+
+    /// First column the standing dog may reach on the left past a guest (a floating squid,
+    /// a cat on the lawn) between the house and the dog, or past the house without one.
+    fn guest_left(&self) -> f32 {
+        let mut left = self.house_left();
         let dog_x = self.geo().cx as f32 + self.host_dx;
         for g in &self.guests {
             let x = guest_drawn_x(g);
@@ -680,8 +685,12 @@ impl App {
             lo = lo.min(l);
             hi = hi.max(r);
         }
-        let clear = self.yard_left();
+        // the house always wins; a guest only as far as the dog still fits the pane (a
+        // squid playing with the dog drifts toward it for a moment)
         let edge = self.w as f32 - 1.0;
+        let clear = self
+            .house_left()
+            .max(self.guest_left().min(edge - (hi - lo)));
         if lo < clear {
             clear - lo
         } else if hi > edge {
@@ -781,10 +790,10 @@ impl App {
     /// `clear_dx`) clear of the doghouse and inside the right edge; the house wins.
     fn yard_range(&self, body: &Body) -> (f32, f32) {
         let (left, right) = self.dog_extent(body);
-        let clear = self.yard_left();
         let edge = self.w as f32 - 2.0;
-        let lo = clear - left;
-        let hi = (edge - right).max(lo);
+        let hi_free = edge - right;
+        let lo = (self.house_left() - left).max((self.guest_left() - left).min(hi_free));
+        let hi = hi_free.max(lo);
         (lo, hi)
     }
 
@@ -1304,6 +1313,20 @@ impl Pet for DogPet {
             }
             Kind::Dog => (1.0, 0.0),
         }
+    }
+    fn guest_drift(&self, app: &App, guest: Kind, x: f32, dx: f32) -> f32 {
+        let dog_x = app.geo().cx as f32 + app.host_dx;
+        if guest != Kind::Squid || x >= dog_x {
+            return dx;
+        }
+        // a squid between the doghouse and the dog keeps to its stretch of lawn: never
+        // over the house, never into the room the dog runs and fetches in
+        let half = guest_half(app, Kind::Squid);
+        let (ww, _) = crate::dog_art::seat_dims(app.w, app.h, app.scale);
+        let house = crate::dog_art::house_right(app.w, app.h) as f32 + 1.0;
+        let lo = (house + half + 1.0).min(x);
+        let hi = (dog_x - 0.45 * ww - half - 1.0).max(x);
+        (x + dx).clamp(lo, hi) - x
     }
     fn guest_x(&self, app: &App, guest: Kind, x: f32) -> f32 {
         if guest != Kind::Squid {
