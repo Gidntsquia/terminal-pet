@@ -293,6 +293,15 @@ pub struct DogPose {
 impl DogPose {
     /// The default idle pose is sitting, facing the viewer; the dog gets up (side view)
     /// to walk, sniff, dig, fetch, spin or roll.
+    /// A happy dog on the move: panting smile, tongue out, tail wagging.
+    pub fn happy_on_the_move(&mut self) {
+        if self.walking || self.running {
+            self.wag = self.wag.max(0.8);
+            self.open = self.open.max(0.45);
+            self.tongue = 1.0;
+        }
+    }
+
     pub fn seated(&self) -> bool {
         !(self.walking
             || self.running
@@ -972,6 +981,7 @@ impl App {
             p.wag = 0.7;
         }
         p.walking &= !p.running;
+        p.happy_on_the_move();
         p.nap = self.dog.nap_k;
         p.up = self.pet.on;
         p
@@ -1672,12 +1682,12 @@ mod tests {
         still("pose_walk", &|p| {
             p.walking = true;
             p.step = 1.0;
+            p.happy_on_the_move();
         });
         still("pose_run", &|p| {
             p.running = true;
             p.step = 2.5;
-            p.open = 0.5;
-            p.tongue = 1.0;
+            p.happy_on_the_move();
         });
         still("pose_sniff", &|p| {
             p.head_down = 1.0;

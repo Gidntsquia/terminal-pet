@@ -452,6 +452,8 @@ fn draw_tail(r: &Rig, cv: &mut Canvas, p: &crate::dog::DogPose) {
     let m = 0.8 * r.ru / 0.42;
     let (bu, bv) = (-0.42 * m, r.vb + r.rv * 0.5);
     let wag = (p.wag_ph).sin() * p.wag.clamp(0.0, 1.0) * 0.55;
+    // happy on the move: the tail rides high
+    let up = if p.walking || p.running { 0.45 } else { 0.0 };
     let col = b.coat;
     let stampc = |cv: &mut Canvas, u: f32, v: f32, ch: char, c: Rgb| {
         r.stamp(cv, u, v, ch, c);
@@ -468,10 +470,17 @@ fn draw_tail(r: &Rig, cv: &mut Canvas, p: &crate::dog::DogPose) {
         }
     };
     match b.tail {
-        Tail::Straight => line(cv, 0.6 + wag, 0.30 * m, true, '\u{2588}', col),
+        Tail::Straight => line(cv, 0.6 + up + wag, 0.30 * m, true, '\u{2588}', col),
         Tail::Plume => {
-            line(cv, 0.7 + wag, 0.32 * m, true, '\u{2588}', col);
-            line(cv, 0.45 + wag, 0.3 * m, false, '\u{2593}', shade(col, -0.4));
+            line(cv, 0.7 + up + wag, 0.32 * m, true, '\u{2588}', col);
+            line(
+                cv,
+                0.45 + up + wag,
+                0.3 * m,
+                false,
+                '\u{2593}',
+                shade(col, -0.4),
+            );
         }
         Tail::Curl => {
             // an arc curling forward over the back
@@ -490,18 +499,25 @@ fn draw_tail(r: &Rig, cv: &mut Canvas, p: &crate::dog::DogPose) {
             stampc(cv, -0.5 * m, bv + 0.5 + o, '\u{2588}', col);
         }
         Tail::Pom => {
-            line(cv, 0.9 + wag, 0.14 * m, false, '\u{2588}', col);
+            line(cv, 0.9 + up + wag, 0.14 * m, false, '\u{2588}', col);
             let (cu, cv0) = (
-                bu - 0.14 * m * (0.9 + wag).cos(),
-                bv + 0.07 * m * (0.9 + wag).sin() + 1.0,
+                bu - 0.14 * m * (0.9 + up + wag).cos(),
+                bv + 0.07 * m * (0.9 + up + wag).sin() + 1.0,
             );
             r.ell(cv, (cu, cv0), (0.06 * m, 0.04 * m), &|_, _, x, y| {
                 (if (x + y) % 2 == 0 { '@' } else { '\u{2588}' }, b.light)
             });
         }
         Tail::Bushy => {
-            line(cv, -0.5 + wag, 0.34 * m, true, '\u{2593}', shade(col, -0.2));
-            line(cv, -0.5 + wag, 0.34 * m, false, '\u{2588}', col);
+            line(
+                cv,
+                -0.5 + 2.0 * up + wag,
+                0.34 * m,
+                true,
+                '\u{2593}',
+                shade(col, -0.2),
+            );
+            line(cv, -0.5 + 2.0 * up + wag, 0.34 * m, false, '\u{2588}', col);
         }
     }
 }
@@ -1496,8 +1512,8 @@ fn roll_extent(w: u16, h: u16, scale: f32, face: f32) -> (f32, f32) {
 pub fn leg_frac(b: &Breed) -> f32 {
     match b.pat {
         Pat::Corgi | Pat::Dachshund => 0.3,
-        Pat::Shepherd | Pat::Dalmatian | Pat::Poodle => 0.6,
-        _ => 0.45,
+        Pat::Shepherd | Pat::Dalmatian | Pat::Poodle => 0.52,
+        _ => 0.41,
     }
 }
 
@@ -1511,13 +1527,14 @@ fn stand_rig<'a>(body: &Body, w: u16, h: u16) -> Rig<'a> {
     let p = &body.dpose;
     let hru = (0.42 * ww).max(4.0);
     let hrv = 0.18 * hh;
-    let withers = 0.62 * hh;
+    // chibi like the seated dog: a big round head on a small, round body with stubby legs
+    let withers = 0.54 * hh;
     let ll = (leg_frac(r.br) * withers).max(2.0);
     let ru = hru
         * if r.br.pat == Pat::Dachshund {
-            1.55
+            1.35
         } else {
-            1.3
+            1.0
         };
     r.m = ru / 0.42;
     r.ru = ru;
@@ -1530,7 +1547,15 @@ fn stand_rig<'a>(body: &Body, w: u16, h: u16) -> Rig<'a> {
     let hd = p.head_down.max(0.5 * p.crouch);
     let low = hrv * 0.95 + 0.5;
     r.hv = hv0 + p.look_up * 0.03 * hh - hd * (hv0 - low);
-    r.hu = ru + 0.1 * hru + hd * 0.25 * hru;
+    r.hu = 0.62 * ru + hd * 0.25 * hru;
+    // a bouncy, happy step: the body and head rise twice per stride, paws stay down
+    if p.walking || p.running {
+        let amp = if p.running { 1.0 } else { 0.7 };
+        let bob = amp * (0.5 - 0.5 * (2.0 * p.step).cos());
+        r.ll += bob;
+        r.vb += bob;
+        r.hv += bob;
+    }
     r.flip = false;
     r
 }
@@ -1542,18 +1567,18 @@ fn profile(p: &crate::dog::DogPose) -> bool {
 
 /// Half-width of the profile skull (columns).
 fn skull_ru(r: &Rig) -> f32 {
-    0.68 * r.hru
+    0.88 * r.hru
 }
 
 /// How far the profile muzzle reaches past the skull (columns, at least 2).
 fn muzzle_len(r: &Rig) -> f32 {
-    (0.36 * r.hru).max(2.5)
+    (0.14 * r.hru).max(2.0)
 }
 
 /// Rows (top, bottom) of the profile muzzle in local `v`.
 fn muzzle_rows(r: &Rig) -> (f32, f32) {
-    let top = r.hv - 0.2 * r.hrv;
-    let bot = (r.hv - 0.9 * r.hrv).min(top - 2.0);
+    let top = r.hv - 0.18 * r.hrv;
+    let bot = (r.hv - 0.78 * r.hrv).min(top - 2.0);
     (top, bot)
 }
 
@@ -1665,8 +1690,8 @@ fn stand_leg(
     };
     let top = |_: f32| fur;
     // two columns thick below the body; the upper leg is hidden in the body and thigh
-    let hw = if front { 1.0 } else { 1.5 };
-    let lw = if far { 0.5 } else { 1.0 };
+    let hw = if front { 1.5 } else { 2.0 };
+    let lw = if far { 1.0 } else { 1.5 };
     seg(r, cv, q[0], q[1], hw, &top);
     seg(r, cv, q[1], q[2], lw, &lower);
     seg(r, cv, q[2], q[3], lw, &lower);
@@ -1677,8 +1702,8 @@ fn stand_leg(
         paw_col(b)
     };
     let (pu, pv) = q[3];
-    for k in 0..4 {
-        r.stamp(cv, pu - 1.0 + k as f32 * 0.9, pv, '\u{2588}', pc);
+    for k in 0..5 {
+        r.stamp(cv, pu - 1.5 + k as f32 * 0.9, pv, '\u{2588}', pc);
     }
     if b.pat == Pat::Poodle {
         // pompoms at the ankle and the paw
@@ -1695,9 +1720,9 @@ fn stand_body(r: &Rig, cv: &mut Canvas) {
     let (ll, d, ru) = (r.ll, 2.0 * r.rv, r.ru);
     let wh = ll + d;
     let croup = wh - (0.06 * d).max(0.8);
-    let tuck = (0.24 * d).max(1.2);
-    let cf = (0.4 * ru).min(1.2 * d);
-    let cb = (0.36 * ru).min(1.2 * d);
+    let tuck = (0.18 * d).max(1.0);
+    let cf = (0.55 * ru).min(1.2 * d);
+    let cb = (0.5 * ru).min(1.2 * d);
     let (uf, ub) = (ru - cf, -ru + cb);
     let t_of = |u: f32| ((u - ub) / (uf - ub)).clamp(0.0, 1.0);
     let top = |u: f32| croup + (wh - croup) * t_of(u);
@@ -1722,6 +1747,12 @@ fn stand_body(r: &Rig, cv: &mut Canvas) {
                 coat(r, u, v, x, y)
             }
         })
+    });
+    // the seated dog's light chest bib, seen from the side
+    let light = r.br.light;
+    let (bu, bv) = (ru - 0.3 * cf, ll + 0.45 * d);
+    r.ell(cv, (bu, bv), (0.32 * cf, 0.32 * d), &|_, v, _, _| {
+        ('\u{2588}', shade(light, ((v - bv) / d) * 0.6))
     });
 }
 
@@ -1836,12 +1867,19 @@ fn draw_profile_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
         b.light
     };
     let open = p.open > 0.15 || p.tongue > 0.3;
-    let mu0 = hu + 0.25 * su;
-    r.fill(cv, (mu0, tip), (mb, mt), &|u, v, _, _| {
-        let corner = (v < mb + 0.5 || v > mt - 0.5) && u > tip - 0.5;
-        (u >= mu0 && u <= tip && v >= mb - 0.5 && v <= mt + 0.5 && !corner)
-            .then_some(('\u{2588}', muz))
-    });
+    // a short round snout like the seated dog's: an ellipse from the cheek past the skull
+    let mu0 = hu + 0.42 * su;
+    let (mcu, mcv) = ((mu0 + tip) / 2.0, (mt + mb) / 2.0);
+    let (mru, mrv) = ((tip - mu0) / 2.0 + 0.5, (mt - mb) / 2.0 + 0.6);
+    r.fill(
+        cv,
+        (mu0 - 1.0, tip + 1.0),
+        (mb - 1.0, mt + 1.0),
+        &|u, v, _, _| {
+            let (a, b) = ((u - mcu) / mru, (v - mcv) / mrv);
+            (a * a + b * b <= 1.05).then_some(('\u{2588}', muz))
+        },
+    );
     // mouth line along the lower jaw: the dark top half of '▄' cells; open, a dark gap
     let mouth = (0x70, 0x20, 0x30);
     let mrow = mb + 1.0;
@@ -1855,6 +1893,8 @@ fn draw_profile_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
         u += 1.0;
     }
     if open {
+        // the corner of the mouth turns up into a grin
+        r.stamp(cv, mu0 + 0.3 * su - 1.0, mrow, '\u{2588}', mouth);
         // chin dropped a row, tongue hanging out of the side
         let mut u = mu0 + 0.2 * su;
         while u <= tip - 2.5 {
@@ -1876,7 +1916,7 @@ fn draw_profile_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
     }
     r.stamp(cv, tip, mt - 1.0, nose, nc);
     // one big shiny eye and a rosy cheek
-    let (eu, ev) = (hu + 0.32 * su, hv + 0.22 * hrv);
+    let (eu, ev) = (hu + 0.3 * su, hv + 0.15 * hrv);
     let dark = (0x18, 0x12, 0x14);
     if body.closed || body.blink {
         r.stamp(cv, eu - 0.5, ev, '\u{2580}', dark);
@@ -1909,12 +1949,12 @@ fn draw_profile_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
             &|_, _, x, y| (if (x + y) % 2 == 0 { '@' } else { '\u{2588}' }, ear_c),
         );
     } else {
-        let long = if b.pat == Pat::Dachshund { 1.25 } else { 0.85 };
+        let long = if b.pat == Pat::Dachshund { 1.5 } else { 0.95 };
         let swing = if p.running { 0.6 * p.step.sin() } else { 0.0 };
         r.ell(
             cv,
-            (hu - 0.4 * su - swing, hv - hrv * 0.2),
-            (su * 0.3, hrv * long),
+            (hu - 0.35 * su - swing, hv - hrv * 0.3),
+            (r.hru * 0.3, hrv * long),
             &|_, _, _, _| ('\u{2593}', ear_c),
         );
     }
