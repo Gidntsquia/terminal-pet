@@ -343,9 +343,9 @@ pub enum RollPose {
 /// Seconds in each roll pose, in order. Down and up take their time; the roll itself
 /// (side, over the back, other side) is one quick, continuous flop with only a short
 /// wiggle belly-up, so nothing stalls in the middle.
-pub const ROLL_TIMES: [f32; 8] = [0.55, 0.4, 0.22, 0.7, 0.22, 0.35, 0.45, 0.5];
-/// Whole roll-over (about 3.4 s).
-pub const ROLL_LEN: f32 = 0.55 + 0.4 + 0.22 + 0.7 + 0.22 + 0.35 + 0.45 + 0.5;
+pub const ROLL_TIMES: [f32; 8] = [0.45, 0.3, 0.2, 0.35, 0.2, 0.3, 0.35, 0.4];
+/// Whole roll-over (about 2.55 s).
+pub const ROLL_LEN: f32 = 0.45 + 0.3 + 0.2 + 0.35 + 0.2 + 0.3 + 0.35 + 0.4;
 const ROLL_POSES: [RollPose; 8] = [
     RollPose::Down,
     RollPose::SideA,
