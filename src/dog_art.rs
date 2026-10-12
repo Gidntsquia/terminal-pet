@@ -2184,7 +2184,7 @@ pub fn draw_dog_into(cv: &mut Canvas, body: &Body, _mono: bool, id: u8, w: u16, 
                 continue;
             }
             // walking into the house: the body vanishes behind its wall
-            if hide && (x as i32) > x0 && (x as i32) < x0 + hw - 1 {
+            if hide && (x as i32) <= x0 + hw {
                 continue;
             }
             if behind && (x as i32) <= x0 + hw && (y as i32) < feet {

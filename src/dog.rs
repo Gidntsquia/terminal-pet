@@ -839,7 +839,9 @@ impl App {
     pub fn dog_pose(&self) -> DogPose {
         let t = self.t;
         let mut p = DogPose {
-            walking: self.burst.2 < BURST && self.home_ox() == 0.0 && self.dog.nap_k <= 0.0,
+            // walks its bursts, and walks to the doghouse door and back out for a nap
+            walking: self.burst.2 < BURST && self.home_ox() == 0.0 && self.dog.nap_k <= 0.0
+                || self.dog.nap_k > 0.0 && self.dog.nap_k < 1.0,
             step: t * 9.0,
             wag_ph: t * 14.0,
             fast_ph: t * 30.0,
@@ -1582,6 +1584,21 @@ mod tests {
             }
             std::fs::write(format!("{dir}/{name}.ans"), out).unwrap();
         };
+        // walking into the doghouse and back out
+        let d = App::idle_duration(Behavior::Nap);
+        for (i, secs) in [0.3, 0.6, 0.9, 1.2, d - 1.2, d - 0.9, d - 0.6, d - 0.3]
+            .into_iter()
+            .enumerate()
+        {
+            let mut a = dog(120, 40, 11);
+            a.state = State::IdleBehavior(Behavior::Nap);
+            a.st = 0.0;
+            a.dog_start_idle(Behavior::Nap);
+            for _ in 0..(secs * 16.0) as usize {
+                a.update(1.0 / 16.0);
+            }
+            ansi(&a, &format!("nap_walk{i}"));
+        }
         for (n, b, secs) in [
             ("nap", Behavior::Nap, 4.0),
             ("dig", Behavior::Dig, 2.0),
