@@ -1025,7 +1025,8 @@ impl App {
             flash: self.flash(),
             bright: self.fx.bright,
             dark: self.fx.dark,
-            closed: self.eyes_closed() || pose.inside,
+            // eyes stay open (the seated eye with its shine) through the whole roll-over
+            closed: (self.eyes_closed() && pose.roll == 0.0) || pose.inside,
             blink: self.blinking(),
             lean: 0.0,
             food_x: g.cx as f32 + dx,

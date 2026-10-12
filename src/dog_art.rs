@@ -85,6 +85,27 @@ pub fn house_right(w: u16, h: u16) -> i32 {
     x0 + hw
 }
 
+/// Is cell (x, y) covered by the doghouse drawing (walls, door and roof)? Cells beside
+/// the roof are open sky, so a dog behind the house still shows there.
+fn house_covers(w: u16, h: u16, x: i32, y: i32) -> bool {
+    let (x0, hw, wall, roof) = house(w, h);
+    let base = ground(w, h).0 - 1;
+    if y > base {
+        return false;
+    }
+    if y > base - wall {
+        return (x0..x0 + hw).contains(&x);
+    }
+    let r = base - wall - y;
+    if r >= roof {
+        return false;
+    }
+    let shrink = ((hw + 2) as f32 - 4.0) / roof as f32;
+    let wd = ((hw + 2) as f32 - shrink * r as f32).round() as i32;
+    let xs = x0 - 1 + ((hw + 2) - wd) / 2;
+    (xs..xs + wd).contains(&x)
+}
+
 /// Column of the doghouse door.
 pub fn door_x(w: u16, h: u16) -> f32 {
     let (x0, hw, _, _) = house(w, h);
@@ -2194,7 +2215,7 @@ pub fn draw_dog_into(cv: &mut Canvas, body: &Body, _mono: bool, id: u8, w: u16, 
     draw_dog(&mut sc, body);
     edge_pass(&mut sc);
     let p = &body.dpose;
-    let (x0, hw, _, _) = house(w, h);
+    let (x0, _, _, _) = house(w, h);
     let hide = p.nap > 0.0 && !p.inside;
     // rolling dog shuffling past the house stays behind it
     let behind = p.roll_pose().is_some();
@@ -2205,11 +2226,14 @@ pub fn draw_dog_into(cv: &mut Canvas, body: &Body, _mono: bool, id: u8, w: u16, 
             if c.fg.is_none() {
                 continue;
             }
-            // walking into the house: the body vanishes behind its wall
-            if hide && (x as i32) <= x0 + hw {
+            // walking into the house: the body vanishes behind its walls and roof
+            // (the open sky beside the roof still shows the dog)
+            let (xi, yi) = (x as i32, y as i32);
+            let covered = house_covers(w, h, xi, yi) || xi < x0 - 1;
+            if hide && covered {
                 continue;
             }
-            if behind && (x as i32) <= x0 + hw && (y as i32) < feet {
+            if behind && covered && yi < feet {
                 continue;
             }
             cv.cells[y * cv.w + x] = c;
