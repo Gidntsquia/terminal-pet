@@ -1114,6 +1114,11 @@ impl Pet for DogPet {
     }
     fn update(&self, app: &mut App, dt: f32) {
         app.dog_motes(dt);
+        // no wander across the yard during an action or right after it: the dog sits a
+        // moment first, so e.g. a roll-over does not run on into a walk
+        if app.any_react() || app.state != State::Idle {
+            app.next_burst = app.next_burst.max(app.t + 2.5);
+        }
         app.dog_update(dt);
         if app.t >= app.dog.next_wag + 0.8 {
             app.dog.next_wag = app.t + app.rng.random_range(3.0..8.0);
@@ -1744,6 +1749,37 @@ mod tests {
 
     /// Standing is about as tall as sitting (within 10%) in every breed, measured on the
     /// drawn cells at 120x40.
+    #[test]
+    fn roll_never_runs_on_into_a_walk() {
+        // a press just before the first wander burst (t = 6 s) used to end in a walk
+        for at in [3.0f32, 4.0, 5.0, 5.9] {
+            let mut a = dog(120, 40, 5);
+            a.state = State::Idle;
+            while a.t < at {
+                a.update(1.0 / 16.0);
+                a.state = State::Idle;
+            }
+            a.press(Key::Pet);
+            let mut seated_since = None;
+            for _ in 0..(10 * 16) {
+                a.update(1.0 / 16.0);
+                a.state = State::Idle;
+                let p = a.dog_pose();
+                if a.any_react() {
+                    continue;
+                }
+                let since = *seated_since.get_or_insert(a.t);
+                if a.t - since < 2.0 {
+                    assert!(
+                        p.seated() && a.burst.2 >= BURST,
+                        "press at {at}: the dog got up {:.2} s after the roll",
+                        a.t - since
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn standing_matches_seated_size() {
         let extent = |cv: &crate::art::Canvas| {
