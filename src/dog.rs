@@ -340,10 +340,12 @@ pub enum RollPose {
     Sit,
 }
 
-/// Seconds in each roll pose, in order; the belly-up pose takes whatever is left over.
-pub const ROLL_TIMES: [f32; 8] = [0.6, 0.5, 0.3, 1.4, 0.3, 0.5, 0.4, 0.5];
-/// Whole roll-over (about 4.5 s).
-pub const ROLL_LEN: f32 = 0.6 + 0.5 + 0.3 + 1.4 + 0.3 + 0.5 + 0.4 + 0.5;
+/// Seconds in each roll pose, in order. Down and up take their time; the roll itself
+/// (side, over the back, other side) is one quick, continuous flop with only a short
+/// wiggle belly-up, so nothing stalls in the middle.
+pub const ROLL_TIMES: [f32; 8] = [0.55, 0.4, 0.22, 0.7, 0.22, 0.35, 0.45, 0.5];
+/// Whole roll-over (about 3.4 s).
+pub const ROLL_LEN: f32 = 0.55 + 0.4 + 0.22 + 0.7 + 0.22 + 0.35 + 0.45 + 0.5;
 const ROLL_POSES: [RollPose; 8] = [
     RollPose::Down,
     RollPose::SideA,
@@ -366,11 +368,12 @@ impl DogPose {
     }
 }
 
-/// Flipbook position (`DogPose::roll`) at `st` seconds into a pet reaction of `dur` seconds:
-/// pose index + 1 plus the progress through that pose; 0 when not rolling.
-pub fn roll_at(st: f32, dur: f32) -> f32 {
-    let mut t = ROLL_TIMES;
-    t[3] += (dur - ROLL_LEN).max(0.0);
+/// Flipbook position (`DogPose::roll`) at `st` seconds into a pet reaction: pose index + 1
+/// plus the progress through that pose; 0 when not rolling. More petting while it rolls
+/// makes the reaction longer but never holds a roll pose longer: the dog finishes the roll
+/// and wags seated for the rest.
+pub fn roll_at(st: f32) -> f32 {
+    let t = ROLL_TIMES;
     let mut start = 0.0;
     if st < 0.0 {
         return 0.0;
@@ -917,7 +920,7 @@ impl App {
         if self.pet.on {
             let r = &self.pet;
             p.wag = 1.0;
-            p.roll = roll_at(r.st, r.dur);
+            p.roll = roll_at(r.st);
             if p.roll > 0.0 {
                 p.tongue = 1.0;
                 p.open = p.open.max(0.3);
@@ -1070,10 +1073,10 @@ fn guest_half(app: &App, kind: Kind) -> f32 {
 }
 
 /// A squid guest's size factor (absolute, not relative to the host's) and height in rows:
-/// 0.6 of the seated dog's height.
+/// about 0.8 of the seated dog's height.
 fn squid_guest_size(app: &App) -> (f32, i32) {
     let (_, hh) = crate::dog_art::seat_dims(app.w, app.h, app.scale);
-    let s = 0.57 * (hh + 1.0) / (app.h as f32 * 0.8);
+    let s = 0.735 * (hh + 1.0) / (app.h as f32 * 0.8);
     let total = ((app.h as f32 * 0.8 * s).round() as i32).max(8);
     (s, total)
 }
@@ -1292,7 +1295,7 @@ impl Pet for DogPet {
                 let total = ((app.h as f32 * 0.68 * app.scale * 0.6).round() as i32).max(8);
                 (0.6, (ground - (3 + total) + 1) as f32)
             }
-            // a visiting squid floats over the lawn, about 0.6 of the seated dog's height
+            // a visiting squid floats over the lawn, about 0.8 of the seated dog's height
             // (as in the cat room) with all its tentacles above the grass
             Kind::Squid => {
                 let (s, total) = squid_guest_size(app);
@@ -1664,16 +1667,20 @@ mod tests {
         let mut a = fresh();
         a.press(Key::Pet);
         let mut t = 0.0;
-        for (name, at) in [
-            ("roll1_down", 0.3),
-            ("roll2_side", 0.85),
-            ("roll3_twist", 1.25),
-            ("roll4_back", 2.1),
-            ("roll5_twist", 2.95),
-            ("roll6_side", 3.35),
-            ("roll7_stand", 3.8),
-            ("roll8_sit", 4.25),
-        ] {
+        let names = [
+            "roll1_down",
+            "roll2_side",
+            "roll3_twist",
+            "roll4_back",
+            "roll5_twist",
+            "roll6_side",
+            "roll7_stand",
+            "roll8_sit",
+        ];
+        let mut start = 0.0;
+        for (name, d) in names.into_iter().zip(ROLL_TIMES) {
+            let at = start + 0.6 * d;
+            start += d;
             while t < at {
                 a.update(1.0 / 16.0);
                 a.state = State::Idle;

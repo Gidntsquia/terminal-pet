@@ -1602,6 +1602,31 @@ fn seg(r: &Rig, cv: &mut Canvas, a: (f32, f32), b: (f32, f32), hw: f32, c: &dyn 
     }
 }
 
+/// A run of cells from `a` to `b` (local) whose half-width goes from `hw.0` to `hw.1`.
+fn taper(
+    r: &Rig,
+    cv: &mut Canvas,
+    a: (f32, f32),
+    b: (f32, f32),
+    hw: (f32, f32),
+    paint: &dyn Fn(f32, f32, i32, i32) -> (char, Rgb),
+) {
+    let len = ((b.0 - a.0).powi(2) + (2.0 * (b.1 - a.1)).powi(2)).sqrt();
+    let n = (len * 1.5).max(2.0) as i32;
+    for k in 0..=n {
+        let t = k as f32 / n as f32;
+        let (u, v) = (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t);
+        let w = hw.0 + (hw.1 - hw.0) * t;
+        let mut du = -w;
+        while du <= w + 0.01 {
+            let (x, y) = r.xy(u + du, v);
+            let (c, col) = paint(u + du, v, x, y);
+            r.stamp(cv, u + du, v, c, col);
+            du += 0.5;
+        }
+    }
+}
+
 /// Socks: breeds with white feet get light lower legs.
 fn socks(b: &Breed) -> bool {
     matches!(
@@ -1652,9 +1677,9 @@ fn stand_leg(
     } else {
         [
             (u0, l + 0.5 * d),
-            (u0 + 0.3 * l + 0.5, 0.9 * l),
-            (u0 - 0.4 * l - 0.8, 0.36 * l),
-            (u0 - 0.3 * l - 0.6, 0.0),
+            (u0 + 0.25 * l + 0.8, 0.62 * l),
+            (u0 - 0.35 * l - 1.0, 0.3 * l),
+            (u0 - 0.25 * l - 0.6, 0.0),
         ]
     };
     // swing about the anchor in visual space (a row is two columns tall)
@@ -1689,11 +1714,28 @@ fn stand_leg(
         }
     };
     let top = |_: f32| fur;
-    // two columns thick below the body; the upper leg is hidden in the body and thigh
-    let hw = if front { 1.5 } else { 2.0 };
     let lw = if far { 1.0 } else { 1.5 };
-    seg(r, cv, q[0], q[1], hw, &top);
-    seg(r, cv, q[1], q[2], lw, &lower);
+    if front {
+        // the upper leg is hidden in the body
+        seg(r, cv, q[0], q[1], 1.5, &top);
+        seg(r, cv, q[1], q[2], lw, &lower);
+    } else {
+        // the hind leg is as chunky as the seated dog's haunch: a wide, shaded thigh down
+        // to the knee, then a thick shin tapering to the hock
+        let thick = 0.55 * r.ru * if far { 0.75 } else { 1.0 };
+        let dk = if far { -1.1 } else { -0.5 };
+        let thigh = |u: f32, v: f32, x: i32, y: i32| {
+            let (c, col) = coat(r, u, v, x, y);
+            (c, shade(col, dk))
+        };
+        // a round haunch at the hip, as on the seated dog
+        r.ell(cv, q[0], (thick, 0.45 * thick), &thigh);
+        taper(r, cv, q[0], q[1], (thick, lw + 1.0), &thigh);
+        taper(r, cv, q[1], q[2], (lw + 1.0, lw + 0.5), &|_, v, _, _| {
+            ('\u{2588}', lower(v))
+        });
+    }
+    let lw = if front { lw } else { lw + 0.5 };
     seg(r, cv, q[2], q[3], lw, &lower);
     // paw: three columns, toes forward
     let pc = if far {
@@ -1754,20 +1796,6 @@ fn stand_body(r: &Rig, cv: &mut Canvas) {
     r.ell(cv, (bu, bv), (0.32 * cf, 0.32 * d), &|_, v, _, _| {
         ('\u{2588}', shade(light, ((v - bv) / d) * 0.6))
     });
-}
-
-/// The hind thigh: a muscle over the top of the near hind leg.
-fn stand_thigh(r: &Rig, cv: &mut Canvas, uh: f32) {
-    let (ll, d) = (r.ll, 2.0 * r.rv);
-    r.ell(
-        cv,
-        (uh + 0.08 * r.ru, ll + 0.32 * d),
-        (0.3 * r.ru, 0.42 * d + 0.12 * ll),
-        &|u, v, x, y| {
-            let (c, col) = coat(r, u, v.max(ll + 0.5 * d), x, y);
-            (c, shade(col, -0.25))
-        },
-    );
 }
 
 /// The standing head: the seated face (front view), or the head in profile.
@@ -2020,7 +2048,6 @@ fn draw_stand(cv: &mut Canvas, body: &Body, side: bool) {
     stand_leg(&r, cv, p, false, uh - 1.0, 0.0, true);
     draw_tail(&r, cv, p);
     stand_body(&r, cv);
-    stand_thigh(&r, cv, uh);
     if p.scratch <= 0.0 {
         stand_leg(&r, cv, p, false, uh, pi, false);
     }
