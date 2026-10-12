@@ -1937,6 +1937,50 @@ mod tests {
         }
     }
 
+    /// Dev helper: `SNAP_DIR=/tmp/x cargo test snap_social` writes the dog chasing a toy
+    /// mouse and fetching (barking) with a squid or a cat guest, a few frames each.
+    #[test]
+    fn snap_social() {
+        let Ok(dir) = std::env::var("SNAP_DIR") else {
+            return;
+        };
+        let save = |a: &App, name: &str| {
+            let cv = crate::art::render(a, false);
+            let mut out = String::new();
+            for y in 0..cv.h {
+                for x in 0..cv.w {
+                    let c = cv.cells[y * cv.w + x];
+                    match c.fg {
+                        Some((r, g, b)) => out.push_str(&format!("\x1b[38;2;{r};{g};{b}m{}", c.ch)),
+                        None => out.push_str(&format!("\x1b[0m{}", c.ch)),
+                    }
+                }
+                out.push_str("\x1b[0m\n");
+            }
+            std::fs::write(format!("{dir}/{name}.ans"), out).unwrap();
+        };
+        let mut a = dog(120, 40, 1);
+        a.enable_social(1);
+        a.on_msg(2, Msg::Mouse);
+        for i in 0..40 {
+            for _ in 0..3 {
+                a.update(1.0 / 16.0);
+            }
+            save(&a, &format!("mouse{i:02}"));
+        }
+        for (name, arrive) in [("squid", Msg::Arrive(0)), ("cat", Msg::ArriveCat(2))] {
+            let mut a = guest_of(120, 40, 8.0, arrive);
+            a.press(Key::Play);
+            for i in 0..16 {
+                for _ in 0..3 {
+                    a.update(1.0 / 16.0);
+                    hello(&mut a, 2, false);
+                }
+                save(&a, &format!("bark_{name}{i:02}"));
+            }
+        }
+    }
+
     #[test]
     fn dog_space_with_neighbor_sends_bark_not_ink() {
         let mut a = dog(120, 40, 1);
