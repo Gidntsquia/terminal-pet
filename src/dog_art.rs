@@ -1011,17 +1011,30 @@ fn draw_sit_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
             };
             let cells: &[(f32, char, char)] = if wide >= 8.0 {
                 &[
-                    (-1.0, '\u{2570}', '\\'),
-                    (0.0, '\u{2500}', '_'),
-                    (1.0, '\u{256f}', '/'),
+                    (-1.0, '\u{2580}', '\\'),
+                    (0.0, '\u{2580}', '_'),
+                    (1.0, '\u{2580}', '/'),
                 ]
             } else if wide >= 5.0 {
-                &[(-0.5, '\u{2570}', '\\'), (0.5, '\u{256f}', '/')]
+                &[(-0.5, '\u{2580}', '\\'), (0.5, '\u{2580}', '/')]
             } else {
-                &[(0.0, 'u', 'u')]
+                &[(0.0, '\u{2580}', 'u')]
             };
+            // no cell background: put fur above and below so the dark lid has fur around it
+            let fur = shade(b.coat, 0.0);
+            for &(du, _, _) in cells {
+                for dv in [-1.0f32, 1.0] {
+                    r.stamp(cv, eu + du, ev + dv, '\u{2588}', fur);
+                }
+            }
             for &(du, ch, a) in cells {
-                r.stamp(cv, eu + du, ev, if cv.ascii { a } else { ch }, dark);
+                r.stamp(
+                    cv,
+                    eu + du,
+                    ev,
+                    if cv.ascii { a } else { ch },
+                    if cv.ascii { dark } else { fur },
+                );
             }
         } else if body.closed || body.blink {
             // closed lid: the cell is lid skin with a thin dark gap along its top edge (the lash line), so
