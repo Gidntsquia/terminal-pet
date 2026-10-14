@@ -192,7 +192,7 @@ fn idle_room(w: u16, h: u16) -> f32 {
 pub(crate) fn fence(w: u16, h: u16) -> (i32, i32) {
     let (feet, _) = ground(w, h);
     let (_, hh) = seat_dims(w, h, 1.0);
-    let horizon = (feet - 3).max(3);
+    let horizon = (feet).max(3);
     let fh = ((0.3 * hh).round() as i32).clamp(2, horizon);
     (horizon - fh, horizon - 1)
 }
@@ -255,7 +255,7 @@ pub fn draw_yard(cv: &mut Canvas, app: &App) {
         cv.text(cx, row + 1, &bot, CLOUD);
     }
     // back fence on the horizon, behind everything in the yard
-    let horizon = (feet - 3).max(3);
+    let horizon = (feet).max(3);
     let (ftop, fbot) = fence(app.w, app.h);
     let fh = fbot - ftop + 1;
     for y in ftop..=fbot {
@@ -978,8 +978,13 @@ fn draw_sit_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
     for s in [-1.0f32, 1.0] {
         let eu = hu + s * ex + shift;
         if body.closed || body.blink {
-            r.stamp(cv, eu - 0.5, ev, '\u{2580}', dark);
-            r.stamp(cv, eu + 0.5, ev, '\u{2580}', dark);
+            // closed lid: the cell is lid skin with a thin dark gap along its top edge (the lash line), so
+            // it reads as a slit under a lid, not a hole; one `-` per eye in ascii
+            let skin = shade(b.coat, 1.0);
+            for du in [-0.5f32, 0.5] {
+                let ch = if cv.ascii { '-' } else { '\u{2586}' };
+                r.stamp(cv, eu + du, ev, ch, if cv.ascii { dark } else { skin });
+            }
         } else {
             let (eru, erv) = ((0.11 * hru).max(1.0), (0.13 * hrv).max(1.0));
             r.ell(cv, (eu, ev), (eru, erv), &|_, _, _, _| ('\u{2588}', iris));
