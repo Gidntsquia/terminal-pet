@@ -634,7 +634,8 @@ impl App {
     /// First column the standing dog may reach on the left past a guest (a floating squid,
     /// a cat on the lawn) between the house and the dog, or past the house without one.
     fn guest_left(&self) -> f32 {
-        let mut left = self.house_left();
+        // the walking dog passes in front of the doghouse: only the pane edge limits it
+        let mut left: f32 = 1.0;
         let dog_x = self.geo().cx as f32 + self.host_dx;
         for g in &self.guests {
             let x = guest_drawn_x(g);
@@ -703,9 +704,7 @@ impl App {
         // the house always wins; a guest only as far as the dog still fits the pane (a
         // squid playing with the dog drifts toward it for a moment)
         let edge = self.w as f32 - 1.0;
-        let clear = self
-            .house_left()
-            .max(self.guest_left().min(edge - (hi - lo)));
+        let clear = self.guest_left().min(edge - (hi - lo));
         if lo < clear {
             clear - lo
         } else if hi > edge {
@@ -815,7 +814,7 @@ impl App {
         // inside the right edge, and off the tree unless a guest leaves no room
         let tree = crate::dog_art::tree_left(self.w, self.h) as f32 + 1.0;
         let hi_free = self.w as f32 - 2.0 - right;
-        let lo = (self.house_left() - left).max((self.guest_left() - left).min(hi_free));
+        let lo = (self.guest_left() - left).min(hi_free);
         let hi = (tree - right).min(hi_free).max(lo);
         (lo, hi)
     }
@@ -1049,7 +1048,8 @@ impl App {
             cx: g.cx,
             dx,
             dy,
-            scale: self.scale,
+            scale: self.scale
+                * (1.0 - (1.0 - crate::dog_art::NAP_SCALE) * ease(self.dog.nap_k.clamp(0.0, 1.0))),
             blush: self.blush(),
             flash: self.flash(),
             bright: self.fx.bright,
@@ -1421,7 +1421,7 @@ impl Pet for DogPet {
         let (l, r) = guest_reach(app, guest);
         let (ww, _) = crate::dog_art::seat_dims(app.w, app.h, app.scale);
         let house = crate::dog_art::house_right(app.w, app.h) as f32 + 1.0;
-        let gap = if guest == Kind::Squid { 3.0 } else { 1.0 };
+        let gap = if guest == Kind::Squid { 5.0 } else { 3.0 };
         let lo = (house + l + gap).min(x);
         let hi = (dog_x - SEAT_REACH * ww - r - 1.0).max(x);
         (x + dx).clamp(lo, hi) - x
@@ -1474,7 +1474,7 @@ impl Pet for DogPet {
         if x < dog_x {
             let house = crate::dog_art::house_right(app.w, app.h) as f32 + 1.0;
             // a squid's tentacle tips sway, so it keeps a wider gap from the wall
-            let gap = if guest == Kind::Squid { 3.0 } else { 1.0 };
+            let gap = if guest == Kind::Squid { 5.0 } else { 3.0 };
             let (lo, hi) = (house + l + gap, dog_x - dog_half - r - 1.0);
             if lo <= hi {
                 // next to the house, leaving the standing dog the most room to play
@@ -1667,8 +1667,9 @@ mod tests {
     }
 
     #[test]
-    fn standing_dog_never_reaches_over_the_doghouse() {
+    fn standing_dog_may_pass_in_front_of_the_doghouse_but_stays_in_the_pane() {
         let mut left_fetches = 0;
+        let mut crossed = 0;
         for (w, h) in [(120u16, 40u16), (200, 50), (90, 30)] {
             for seed in 1..=8u64 {
                 let mut a = dog(w, h, seed);
@@ -1695,8 +1696,9 @@ mod tests {
                         continue;
                     }
                     let left = drawn_left(&a);
+                    crossed += i32::from(left <= house);
                     assert!(
-                        left > house + 1,
+                        left >= 0,
                         "{w}x{h} seed {seed} t {:.2}: dog at col {left}, house ends {house}; clear {} state {:?} pose {:?}",
                         a.t,
                         a.dog.clear_dx,
@@ -1707,6 +1709,7 @@ mod tests {
             }
         }
         assert!(left_fetches > 5, "only {left_fetches} fetches to the left");
+        assert!(crossed > 0, "the dog never passed in front of the house");
     }
 
     #[test]
@@ -1722,6 +1725,39 @@ mod tests {
         assert!(a.dog.nap_k >= 1.0);
         assert!((a.geo().cx as f32 + a.offset().0 - door).abs() < 1.0);
         assert!(a.dog_pose().inside);
+    }
+
+    #[test]
+    fn nap_walk_shrinks_and_feeding_wakes_the_dog_before_it_eats() {
+        let mut a = dog(120, 40, 1);
+        a.state = State::IdleBehavior(Behavior::Nap);
+        a.st = 0.0;
+        a.dog_start_idle(Behavior::Nap);
+        let mut min_mid = 1.0f32;
+        for _ in 0..30 {
+            a.update(1.0 / 16.0);
+            let sc = a.dog_host_body().scale;
+            if a.dog.nap_k > 0.2 && a.dog.nap_k < 0.9 {
+                min_mid = min_mid.min(sc);
+            }
+        }
+        assert!(min_mid < 0.9, "no shrink on the way in: {min_mid}");
+        for _ in 0..40 {
+            a.update(1.0 / 16.0);
+        }
+        assert!(a.dog_pose().inside);
+        assert!((a.dog_host_body().scale - crate::dog_art::NAP_SCALE).abs() < 0.01);
+        a.press(Key::Feed);
+        let mut grew = false;
+        for _ in 0..80 {
+            a.update(1.0 / 16.0);
+            let sc = a.dog_host_body().scale;
+            grew |= a.dog.nap_k > 0.0 && a.dog.nap_k < 1.0 && sc > crate::dog_art::NAP_SCALE;
+        }
+        assert!(grew, "did not grow on the way out");
+        assert_eq!(a.dog.nap_k, 0.0);
+        assert!((a.dog_host_body().scale - 1.0).abs() < 0.01);
+        assert!(a.stats.fed >= 1, "never ate");
     }
 
     /// Cells the dog occupies when drawn alone (owner id 1) on an empty pane.
@@ -1769,31 +1805,39 @@ mod tests {
                 // R1: the house never overlaps the seated dog
                 assert!(left > da::house_right(w, h), "{w}x{h} b{b}: house {left}");
                 // R3: crown top above the head, crown clear of the dog and the house
-                assert!(ccy - rv < top as f32, "{w}x{h} b{b}: crown");
+                assert!(
+                    ccy - rv <= top as f32 + 1.0,
+                    "{w}x{h} b{b}: crown {} vs head {top}",
+                    ccy - rv
+                );
                 assert!(
                     (tx as f32 - ru) > right as f32,
                     "{w}x{h} b{b}: tree {right}"
                 );
                 assert!((tx as f32 - ru) as i32 > da::house_right(w, h));
             }
-            // R1: door at least as tall as the head and body and wider than the seated dog
-            assert!(dh as f32 >= 0.9 * hh, "{w}x{h}: door {dh} vs {hh}");
-            assert!(dw as f32 >= ww, "{w}x{h}: door {dw} vs {ww}");
-            // R3: crown about 1.5x the seated height, trunk in proportion
-            assert!((2.0 * rv / hh - 1.5).abs() < 0.05);
+            // house: a small prop, about 0.6 of the seated height, shorter than the dog
+            let (_, hwid, wall, roof) = da::house(w, h);
+            assert!((wall + roof) as f32 <= hh, "{w}x{h}: house {}", wall + roof);
+            assert!(hwid <= ww as i32 + 3, "{w}x{h}: house width {hwid}");
+            assert!(
+                dw as f32 <= ww * 0.85 && dh < wall,
+                "{w}x{h}: door {dw}x{dh}"
+            );
+            // crown about 0.8x the seated height, trunk in proportion
+            assert!((2.0 * rv / hh - 0.82).abs() < 0.05);
             assert!(tw >= 3);
-            // R4: fence about half the seated dog, on the horizon behind the feet
+            // fence about 0.3 of the seated dog, on the horizon behind the feet
             let fh = (fb - ft + 1) as f32;
-            assert!((fh - 0.5 * hh).abs() <= 1.0, "{w}x{h}: fence {fh}");
+            assert!((fh - 0.3 * hh).abs() <= 1.0, "{w}x{h}: fence {fh}");
             assert!(fb < feet);
         }
-        // R4: about 12 rows at 120x40
         let (ft, fb) = da::fence(120, 40);
-        assert!((11..=14).contains(&(fb - ft + 1)));
+        assert!((7..=9).contains(&(fb - ft + 1)));
     }
 
     #[test]
-    fn yard_sun_is_five_rows_and_props_stay_off_the_footer() {
+    fn yard_sun_is_four_rows_and_props_stay_off_the_footer() {
         for (w, h) in YARD_SIZES {
             let a = seated_dog(w, h, 0);
             let mut cv = crate::art::Canvas::new(w, h, false);
@@ -1811,7 +1855,7 @@ mod tests {
                         })
                     })
                     .count();
-                assert!(disc >= 5, "sun disc {disc} rows");
+                assert!((3..=5).contains(&disc), "sun disc {disc} rows");
             }
             assert!(rows >= 3, "{w}x{h}: sun {rows} rows");
             // the footer row stays empty
@@ -1832,35 +1876,29 @@ mod tests {
                 a.update(1.0 / 16.0);
             }
             assert!(a.dog_pose().inside, "{w}x{h}");
-            // drawn unclipped, the head and body lie inside the door; only the tail
-            // reaches past its right edge (and is clipped when drawn)
-            let (dx0, dw, _) = da::door(w, h);
-            let mut cv = crate::art::Canvas::new(w, h, false);
-            da::draw_dog(&mut cv, &a.host_body());
-            let (mut n, mut inside) = (0, 0);
-            for y in 0..cv.h {
-                for x in 0..cv.w {
-                    if cv.cells[y * cv.w + x].fg.is_some() {
-                        n += 1;
-                        let (xi, yi) = (x as i32, y as i32);
-                        if da::in_door(w, h, xi, yi) {
-                            inside += 1;
-                        } else {
-                            assert!(xi >= dx0 + dw - 2, "{w}x{h}: ({x},{y}) outside the door");
-                        }
-                    }
-                }
+            // only the head shows, inside the door, no lower than its floor row
+            let base = da::ground(w, h).0 - 1;
+            let cells = dog_cells(&a);
+            assert!(cells.len() > 10, "{w}x{h}: head missing");
+            let (_, hd) = da::seat_dims(w, h, da::NAP_SCALE);
+            for c in &cells {
+                assert!(
+                    da::in_door(w, h, c.0, c.1),
+                    "{w}x{h}: ({},{}) outside the door",
+                    c.0,
+                    c.1
+                );
+                assert!(c.1 <= base);
             }
-            assert!(n > 20);
+            let top = cells.iter().map(|c| c.1).min().unwrap();
+            let bot = cells.iter().map(|c| c.1).max().unwrap();
             assert!(
-                inside as f32 >= 0.9 * n as f32,
-                "{w}x{h}: {inside}/{n} in the door"
+                bot >= base - 1,
+                "{w}x{h}: chin not on the floor ({bot} vs {base})"
             );
-            // and what shows is the dog in the door (not hidden by the walls)
-            assert_eq!(
-                dog_cells(&a).len(),
-                inside,
-                "{w}x{h}: all of the door part shows"
+            assert!(
+                ((bot - top + 1) as f32) < 0.8 * hd,
+                "{w}x{h}: more than a head"
             );
         }
     }
@@ -1871,6 +1909,13 @@ mod tests {
         let Ok(dir) = std::env::var("SNAP_DIR") else {
             return;
         };
+        let sz = |k: &str, d: u16| {
+            std::env::var(k)
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(d)
+        };
+        let (sw, sh) = (sz("SNAP_W", 120), sz("SNAP_H", 40));
         let ansi = |a: &App, name: &str| {
             let cv = crate::art::render(a, false);
             let mut out = String::new();
@@ -1892,7 +1937,7 @@ mod tests {
             .into_iter()
             .enumerate()
         {
-            let mut a = dog(120, 40, 11);
+            let mut a = dog(sw, sh, 11);
             a.state = State::IdleBehavior(Behavior::Nap);
             a.st = 0.0;
             a.dog_start_idle(Behavior::Nap);
@@ -1909,7 +1954,7 @@ mod tests {
             ("spin", Behavior::TailSpin, 1.2),
             ("bark", Behavior::Bark, 0.6),
         ] {
-            let mut a = dog(120, 40, 11);
+            let mut a = dog(sw, sh, 11);
             a.state = State::IdleBehavior(b);
             a.st = 0.0;
             a.dog_start_idle(b);
@@ -2147,7 +2192,8 @@ mod tests {
                         format!("{w}x{h} {arrive:?} step {step}: guest {gl}..{gr} dog {dl}..{dr}");
                     assert!(
                         gl > crate::dog_art::house_right(w, h),
-                        "{tag}: on the house"
+                        "{tag}: on the house ({})",
+                        crate::dog_art::house_right(w, h)
                     );
                     assert!(gr < dl, "{tag}: guest not beside the dog");
                     assert!(

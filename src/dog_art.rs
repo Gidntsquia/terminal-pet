@@ -72,27 +72,32 @@ pub fn geo_dog(w: u16, h: u16, scale: f32) -> Geo {
     }
 }
 
-/// Doghouse: (left column, width, wall height, roof height). Sized from the seated dog
-/// (`seat_dims`) so its door fits the dog: the door is as tall as the dog's head and body
-/// and a little wider than the seated dog. The roof may run off the top of the pane.
+/// Scale the napping dog shrinks to while it walks into the doghouse (its head then fits
+/// the small door).
+pub const NAP_SCALE: f32 = 0.45;
+
+/// Doghouse: (left column, width, wall height, roof height). A small prop at the far left,
+/// about two thirds of the seated dog's height; its door is only as big as the shrunken
+/// napping head needs.
 pub(crate) fn house(w: u16, h: u16) -> (i32, i32, i32, i32) {
-    let (ww, _) = seat_dims(w, h, 1.0);
-    let t = ((ww * 0.07).round() as i32).max(2);
+    let (ww, hh) = seat_dims(w, h, 1.0);
+    let t = ((ww * 0.1).round() as i32).max(2);
     let (_, dw, dh) = door(w, h);
     let hw = dw + 2 * t;
-    let wall = dh + 1;
+    let total = ((hh * 0.6).round() as i32).max(6);
     let roof = ((hw as f32 * 0.14).round() as i32).clamp(2, 10);
+    let wall = (total - roof).max(dh + 2);
     (1, hw, wall, roof)
 }
 
 /// Doghouse door: (left column, width, height). Its bottom row is the dog's feet row
 /// `ground().0 - 1`; the top two rows are rounded.
 pub fn door(w: u16, h: u16) -> (i32, i32, i32) {
-    let (ww, hh) = seat_dims(w, h, 1.0);
-    let t = ((ww * 0.07).round() as i32).max(2);
-    let dw = (ww * 1.1).ceil() as i32;
-    // the seated skull top is 0.925 of the seated height above the feet row
-    let dh = (0.925 * hh).round() as i32 + 1;
+    let (ww, _) = seat_dims(w, h, 1.0);
+    let t = ((ww * 0.1).round() as i32).max(2);
+    let (wn, hn) = seat_dims(w, h, NAP_SCALE);
+    let dw = (0.9 * wn).ceil() as i32 + 1;
+    let dh = (0.53 * hn).ceil() as i32 + 2;
     (1 + t, dw, dh)
 }
 
@@ -152,7 +157,7 @@ pub fn seat_half(w: u16, h: u16) -> f32 {
 }
 
 /// Tree: (trunk centre column, trunk width, crown centre row, crown radii in rows / cols).
-/// The crown is about 1.5x the seated dog's height and runs off the top of the pane; it
+/// The crown is about 0.8x the seated dog's height and tops the dog's head; it
 /// starts right of the seated dog (tail and idle drift included).
 pub(crate) fn tree(w: u16, h: u16) -> (i32, i32, f32, f32, f32) {
     let (ww, hh) = seat_dims(w, h, 1.0);
@@ -160,8 +165,8 @@ pub(crate) fn tree(w: u16, h: u16) -> (i32, i32, f32, f32, f32) {
     let wi = w as i32;
     let tw = ((ww * 0.13).round() as i32).max(3);
     let tx = wi - 2 - tw / 2;
-    let rv = 0.75 * hh;
-    let bottom = (feet - 1) as f32 - 0.3 * hh;
+    let rv = 0.41 * hh;
+    let bottom = (feet - 1) as f32 - 0.2 * hh;
     let ccy = bottom - rv;
     // clear of the seated dog: centre + drift + seated half + tail
     let dog_right = wi as f32 / 2.0 + idle_room(w, h) + 0.95 * ww;
@@ -182,13 +187,13 @@ fn idle_room(w: u16, h: u16) -> f32 {
     (w as f32 / 2.0 - g.maxw * 2.2).max(0.0)
 }
 
-/// Back fence: (top row, bottom row). Pickets are about half the seated dog's height and
+/// Back fence: (top row, bottom row). Pickets are about 0.3 of the seated dog's height and
 /// stand on the horizon line behind the dog.
 pub(crate) fn fence(w: u16, h: u16) -> (i32, i32) {
     let (feet, _) = ground(w, h);
     let (_, hh) = seat_dims(w, h, 1.0);
     let horizon = (feet - 3).max(3);
-    let fh = ((0.5 * hh).round() as i32).clamp(2, horizon);
+    let fh = ((0.3 * hh).round() as i32).clamp(2, horizon);
     (horizon - fh, horizon - 1)
 }
 
@@ -202,7 +207,7 @@ pub fn draw_yard(cv: &mut Canvas, app: &App) {
     let (tx, tw, ccy, rv, ru) = tree(app.w, app.h);
     // sun: a disc with rays, in the sky between the dog and the tree, about 0.2 of the
     // seated height (5 rows at 120x40)
-    let sr = (0.1 * hh).max(1.0);
+    let sr = (0.07 * hh).max(1.0);
     let head_right = w as f32 / 2.0 + idle_room(app.w, app.h) + 0.5 * ww;
     let sx = (head_right + tx as f32 - ru) / 2.0;
     let sy = sr + 1.0;
@@ -233,7 +238,7 @@ pub fn draw_yard(cv: &mut Canvas, app: &App) {
         }
     }
     // clouds drifting across the sky, about twice as wide as before
-    let cl = (0.65 * ww).round().clamp(10.0, 32.0) as i32;
+    let cl = (0.55 * ww).round().clamp(10.0, 32.0) as i32;
     for (i, row) in [(0, 2), (1, 5)] {
         let span = w as f32 + cl as f32 * 2.0;
         let cx =
@@ -309,7 +314,7 @@ pub fn draw_yard(cv: &mut Canvas, app: &App) {
         }
     }
     // a flowering bush at the foot of the tree, on the dog's side
-    let br = (0.17 * hh).max(2.0);
+    let br = (0.3 * hh).max(2.0);
     let bu = (br * 2.4)
         .min((tx - tw / 2) as f32 - (w as f32 / 2.0 + 0.6 * ww))
         .max(br);
@@ -2120,18 +2125,19 @@ fn draw_stand(cv: &mut Canvas, body: &Body, side: bool) {
     }
 }
 
-/// Napping in the doghouse: just the head at the door and the tail on the grass beside it.
-/// The napping dog inside the doghouse: the seated dog, asleep, centred in the door.
+/// The napping dog: only its head, at the bottom of the door opening (chin on the house
+/// floor), eyes closed, body hidden behind the wall.
 fn inside_body(body: &Body, w: u16, h: u16) -> Body {
     let mut b2 = body.clone();
     b2.dpose = crate::dog::DogPose {
-        wag: body.dpose.wag * 0.3,
-        wag_ph: body.dpose.wag_ph,
         ..Default::default()
     };
     b2.closed = true;
     b2.blink = false;
-    b2.dy = 0.0;
+    b2.scale = NAP_SCALE;
+    let (_, hn) = seat_dims(w, h, NAP_SCALE);
+    // the chin sits 0.565 of the seated height above the feet row
+    b2.dy = 0.565 * hn - 0.5;
     b2.cx = 0;
     b2.dx = door_x(w, h);
     b2
@@ -2142,18 +2148,18 @@ fn draw_inside(cv: &mut Canvas, body: &Body) {
     draw_sit(cv, &inside_body(body, w, h));
 }
 
-/// Zzz rising from the dog asleep in the doghouse (drawn over the house).
+/// Zzz drifting up from the roof top of the doghouse the dog naps in.
 fn draw_zzz(cv: &mut Canvas, body: &Body, w: u16, h: u16) {
-    let (dx0, dw, dh) = door(w, h);
+    let (x0, hw, wall, roof) = house(w, h);
     let base = ground(w, h).0 - 1;
-    let x0 = dx0 + dw * 3 / 4;
-    let y0 = base - dh + 2 + dh / 6;
+    let top = base - wall - roof;
+    let cx = x0 + hw / 2;
     for i in 0..3 {
-        let k = (body.t * 0.8 + i as f32 * 0.35) % 1.0;
-        let ch = if i % 2 == 0 { 'z' } else { 'Z' };
+        let k = (body.t / 1.5 + i as f32 * 0.33) % 1.0;
+        let ch = ['z', 'Z', 'z'][i as usize];
         cv.put(
-            x0 + (k * 4.0) as i32 + i * 2,
-            y0 - (k * 4.0) as i32 - i,
+            cx + (k * 4.0) as i32 + i * 2,
+            top - (k * 4.0) as i32 - i,
             ch,
             ZZZ,
         );
@@ -2193,9 +2199,6 @@ pub fn draw_dog_into(cv: &mut Canvas, body: &Body, _mono: bool, id: u8, w: u16, 
     // walking into the house hides the body behind its walls and roof; asleep inside,
     // only what the door frames shows
     let hide = p.nap > 0.0 || p.inside;
-    // rolling dog shuffling past the house stays behind it
-    let behind = p.roll_pose().is_some();
-    let (feet, _) = ground(w, h);
     for y in 0..sc.h {
         for x in 0..sc.w {
             let c = sc.cells[y * sc.w + x];
@@ -2213,9 +2216,15 @@ pub fn draw_dog_into(cv: &mut Canvas, body: &Body, _mono: bool, id: u8, w: u16, 
             if p.inside && !in_door(w, h, xi, yi) {
                 continue;
             }
-            if behind && covered && yi < feet {
-                continue;
-            }
+            // asleep: everything at about half brightness
+            let c = if p.inside {
+                Cell {
+                    ch: c.ch,
+                    fg: c.fg.map(|f| lerp(f, (0, 0, 0), 0.5)),
+                }
+            } else {
+                c
+            };
             cv.cells[y * cv.w + x] = c;
             cv.owner[y * cv.w + x] = id;
         }
