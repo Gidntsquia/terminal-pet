@@ -5,6 +5,7 @@ pub mod dog_art;
 pub mod link;
 pub mod pet;
 pub mod social;
+pub mod stats;
 pub use app::{cat, dog};
 
 use app::{App, ColorChoice, Key, Kind, Ptr, color_list, parse_color, random_preset};
@@ -163,7 +164,7 @@ fn draw(
     ascii: bool,
     mode: Mode,
 ) -> io::Result<Vec<u8>> {
-    let cv = art::render(app, ascii);
+    let cv = art::frame(app, ascii);
     term.draw(|f| {
         let area = f.area();
         let buf = f.buffer_mut();
@@ -207,7 +208,8 @@ fn run(
     if let Some(l) = &link {
         app.enable_social(l.pid);
     }
-    let mut last = Instant::now();
+    let born = Instant::now();
+    let mut last = born;
     let mut next = last;
     let o = draw(&mut term, &app, ascii, mode)?;
     app.set_hit(o);
@@ -218,7 +220,19 @@ fn run(
             loop {
                 match event::read()? {
                     Event::Key(k) if k.kind != KeyEventKind::Release => match k.code {
-                        KeyCode::Char('q') | KeyCode::Esc => app.quit = true,
+                        KeyCode::Char('q') => app.quit = true,
+                        KeyCode::Esc => {
+                            if app.card {
+                                app.card = false;
+                                force = true
+                            } else {
+                                app.quit = true
+                            }
+                        }
+                        KeyCode::Char('i') | KeyCode::Char('I') => {
+                            app.card = !app.card;
+                            force = true
+                        }
                         KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                             app.quit = true
                         }
@@ -305,6 +319,7 @@ fn run(
             let dt = now.duration_since(last).as_secs_f32().min(0.25);
             last = now;
             app.update(dt);
+            app.stats.age = born.elapsed().as_secs_f32();
             if let Some(l) = &link {
                 for (to, m) in app.outbox.drain(..) {
                     match to {
@@ -362,7 +377,7 @@ fn breeds_of(name: &str) -> String {
 
 fn help(prog: &str) -> String {
     format!(
-        "{prog} - a giant ASCII pet for your terminal: a squid, a cat or a dog\n\nUSAGE: {prog} [--pet squid|cat|dog] [--ascii] [--solo] [--no-mouse] [--seed N] [--color NAME | --breed NAME]\n\n  --pet KIND    which pet: squid (default), cat or dog\n  --color NAME  squid color: {}\n  --breed NAME  cat breed: {}\n                dog breed: {}\n  --solo        don't look for other pets in other terminals\n  --no-mouse    don't capture the mouse (keeps terminal text selection)\n\nKeys: f feed (squid) / treat (cat) / biscuit (dog), p pet, space play (squid) / laser dot (cat) / ball and bark (dog), c color / breed, v visit a neighbor (or call your guest/visitor home), q/Esc quit\nMouse: click = boop, drag across the pet = stroke / scratch, scroll wheel over it = ruffle / shake-off\n\nPets in other terminals on this machine find each other automatically (squid, cat and dog can all visit each other): they\nvisit (on their own every 20-30 minutes, with a 10 minute pause after a visit; or press v any time) and share treats, fish, motes, bubbles, ink, pounces and barks. Repeated f/p/space presses stack up. Use --solo to stay on your own.",
+        "{prog} - a giant ASCII pet for your terminal: a squid, a cat or a dog\n\nUSAGE: {prog} [--pet squid|cat|dog] [--ascii] [--solo] [--no-mouse] [--seed N] [--color NAME | --breed NAME]\n\n  --pet KIND    which pet: squid (default), cat or dog\n  --color NAME  squid color: {}\n  --breed NAME  cat breed: {}\n                dog breed: {}\n  --solo        don't look for other pets in other terminals\n  --no-mouse    don't capture the mouse (keeps terminal text selection)\n\nKeys: i info card (age and counts this session; i or Esc closes it), f feed (squid) / treat (cat) / biscuit (dog), p pet, space play (squid) / laser dot (cat) / ball and bark (dog), c color / breed, v visit a neighbor (or call your guest/visitor home), q/Esc quit\nMouse: click = boop, drag across the pet = cuddle (squid) / scratch (cat) / scritch (dog), scroll wheel over it = ruffle / shake-off\n\nPets in other terminals on this machine find each other automatically (squid, cat and dog can all visit each other): they\nvisit (on their own every 20-30 minutes, with a 10 minute pause after a visit; or press v any time) and share treats, fish, motes, bubbles, ink, pounces and barks. Repeated f/p/space presses stack up. Use --solo to stay on your own.",
         color_list(),
         breeds_of("cat"),
         breeds_of("dog")

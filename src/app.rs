@@ -340,6 +340,9 @@ pub struct App {
     msg_t: f32,
     /// Which body drew each cell in the last frame (see `art::Canvas::owner`).
     hit: Vec<u8>,
+    /// Session stats (memory only) and whether the `i` info card is open.
+    pub stats: crate::stats::Stats,
+    pub card: bool,
 }
 
 const BURST: f32 = 1.8;
@@ -418,6 +421,8 @@ impl App {
             drag: None,
             msg_t: 0.0,
             hit: vec![],
+            stats: crate::stats::Stats::default(),
+            card: false,
         }
     }
 
@@ -470,6 +475,28 @@ impl App {
             Some(p) => p.breeds()[i],
             None => PRESETS[i].0,
         }
+    }
+
+    /// Info-card label for drag seconds: per pet via the `Pet` trait, "Cuddled" for the squid.
+    pub fn drag_label(&self) -> &'static str {
+        self.pet().map_or("Cuddled", |p| p.drag_label())
+    }
+
+    /// The drag gesture as a verb ("cuddle" for the squid).
+    pub fn drag_verb(&self) -> &'static str {
+        self.pet().map_or("cuddle", |p| p.drag_verb())
+    }
+
+    /// Info-card title: pet kind and color / breed, e.g. "Dog · golden".
+    pub fn card_title(&self, ascii: bool) -> String {
+        let name = self.pet().map_or("squid", |p| p.name());
+        let mut c = name.chars();
+        let cap = c
+            .next()
+            .map(|f| f.to_ascii_uppercase().to_string() + c.as_str())
+            .unwrap_or_default();
+        let dot = if ascii { "-" } else { "\u{b7}" };
+        format!("{cap} {dot} {}", self.kind_name(self.color))
     }
 
     /// Current preset index (the target one while fading).
@@ -642,6 +669,7 @@ impl App {
                         self.set_msg(Key::Pet.msg_for(self.kind));
                         match w {
                             Who::Host => {
+                                self.stats.drag_left = 1.0;
                                 let p = &mut self.pet;
                                 if p.on {
                                     p.dur = p.dur.max(p.st + 1.0);
@@ -672,6 +700,9 @@ impl App {
                     && let Some(w) = d.start
                     && self.count_slot(3)
                 {
+                    if w == Who::Host {
+                        self.stats.booped += 1;
+                    }
                     self.touch_of(w).boop = BOOP;
                     self.add_heart(col, row);
                     self.set_msg(self.pet().map_or("Boop!", |p| p.boop_msg()));
@@ -742,6 +773,11 @@ impl App {
         }
         if !self.count_press(k) {
             return false;
+        }
+        match k {
+            Key::Feed => self.stats.fed += 1,
+            Key::Pet => self.stats.petted += 1,
+            Key::Play => {}
         }
         self.msg = Some(k.msg_for(self.kind));
         self.state = State::Idle;
@@ -880,6 +916,7 @@ impl App {
     }
 
     pub fn update(&mut self, dt: f32) {
+        self.stats.update(dt, self.touch.ruffle > 0.0);
         self.t += dt;
         self.st += dt;
         if self.fade < 1.0 {
@@ -1480,6 +1517,99 @@ mod tests {
         a.pointer(Ptr::Drag, sq.0 + 1, sq.1);
         assert!(a.press(Key::Feed));
         assert!(a.feed.on);
+    }
+
+    #[test]
+    fn session_stats_count_presses_boops_ruffle_and_drag() {
+        let mut a = App::new(120, 40, 1);
+        assert_eq!(a.stats, crate::stats::Stats::default());
+        for _ in 0..3 {
+            assert!(a.press(Key::Feed));
+        }
+        a.press(Key::Pet);
+        a.press(Key::Play);
+        assert_eq!((a.stats.fed, a.stats.petted), (3, 1));
+        // capped presses don't count
+        for _ in 0..5 {
+            a.press(Key::Feed);
+        }
+        assert_eq!(a.stats.fed, PRESS_CAP as u32);
+        let (sq, _) = framed(&mut a);
+        for _ in 0..10 {
+            a.pointer(Ptr::Down, sq.0, sq.1);
+            a.pointer(Ptr::Up, sq.0, sq.1);
+        }
+        assert_eq!(a.stats.booped as usize, PRESS_CAP);
+        a.pointer(Ptr::Scroll, sq.0, sq.1);
+        for _ in 0..80 {
+            a.update(0.05);
+        }
+        assert!(
+            (a.stats.ruffled - RUFFLE_NOTCH).abs() < 0.1,
+            "{}",
+            a.stats.ruffled
+        );
+        let (sq, _) = framed(&mut a);
+        a.pointer(Ptr::Down, sq.0, sq.1);
+        for i in 0..30 {
+            a.pointer(Ptr::Drag, sq.0 + (i % 2) * 3, sq.1);
+            a.update(0.1);
+        }
+        a.pointer(Ptr::Up, sq.0, sq.1);
+        for _ in 0..40 {
+            a.update(0.05);
+        }
+        assert!(
+            (3.0..=4.1).contains(&a.stats.dragged),
+            "{}",
+            a.stats.dragged
+        );
+        assert!(a.stats.age > 9.0);
+    }
+
+    #[test]
+    fn card_lists_six_rows_with_the_pet_word_and_fits_small() {
+        for (k, word) in [
+            (Kind::Squid, "Cuddled"),
+            (Kind::Cat, "Scratched"),
+            (Kind::Dog, "Scritched"),
+        ] {
+            for (w, h, ascii) in [(120, 40, false), (60, 20, true), (40, 12, false)] {
+                let mut a = App::new(w, h, 2);
+                a.kind = k;
+                if let Some(p) = k.pet() {
+                    p.init(&mut a);
+                }
+                a.init_color(0, false);
+                a.card = true;
+                let cv = crate::art::frame(&a, ascii);
+                let rows: Vec<String> = (0..cv.h)
+                    .map(|y| (0..cv.w).map(|x| cv.cells[y * cv.w + x].ch).collect())
+                    .collect();
+                let all = rows.join("\n");
+                for l in ["Age", "Fed", "Petted", "Booped", "Ruffled", word] {
+                    assert!(all.contains(l), "{k:?} {w}x{h} missing {l}");
+                }
+                let top = rows
+                    .iter()
+                    .position(|r| r.contains(if ascii { "+---" } else { "\u{256d}" }))
+                    .unwrap();
+                assert!(
+                    top + crate::art::CARD_H as usize <= h as usize - 1,
+                    "{w}x{h} card over footer"
+                );
+                assert!(
+                    rows[h as usize - 1].contains("[i] info")
+                        && rows[h as usize - 1].contains("age 0m 00s")
+                );
+                if ascii {
+                    assert!(all.is_ascii());
+                }
+                a.card = false;
+                let cv = crate::art::frame(&a, ascii);
+                assert!(!cv.cells.iter().any(|c| c.ch == '\u{256d}'));
+            }
+        }
     }
 
     #[test]

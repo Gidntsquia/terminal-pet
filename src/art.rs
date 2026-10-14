@@ -405,16 +405,132 @@ pub fn render(app: &App, ascii: bool) -> Canvas {
     } else if app.is_away() {
         cv.text_center(hh - 2, "Out visiting!", PEACH);
     }
-    cv.text_center(
-        hh - 1,
-        match (pet, app.social) {
-            (None, true) => "[f] feed   [p] pet   [space] play   [v] visit   [c] color   [q] quit",
-            (None, false) => "[f] feed   [p] pet   [space] play   [c] color   [q] quit",
-            (Some(p), social) => p.hints(social),
-        },
+    cv.text_center(hh - 1, hints(app), DIM);
+    cv
+}
+
+/// The bottom key hint line of the scene (without the info-card additions).
+fn hints(app: &App) -> &'static str {
+    match (app.pet(), app.social) {
+        (None, true) => "[f] feed   [p] pet   [space] play   [v] visit   [c] color   [q] quit",
+        (None, false) => "[f] feed   [p] pet   [space] play   [c] color   [q] quit",
+        (Some(p), social) => p.hints(social),
+    }
+}
+
+/// A full frame: the scene from `render`, then the footer with `[i] info` and the age, and
+/// the info card when it is open. Kept apart from `render` so the squid scene stays
+/// byte-identical (golden test).
+pub fn frame(app: &App, ascii: bool) -> Canvas {
+    let mut cv = render(app, ascii);
+    if app.w < 40 || app.h < 12 {
+        return cv;
+    }
+    draw_footer(&mut cv, app);
+    if app.card {
+        draw_card(&mut cv, app);
+    }
+    cv
+}
+
+/// Footer pieces that fit in `room` columns: drops the piece left of `[i] info` (breed,
+/// visit, play...) until they fit, joined with 3 spaces, or 2 when that is what fits.
+pub fn footer_line(app: &App, room: usize) -> String {
+    let mut parts: Vec<String> = hints(app).split("   ").map(str::to_string).collect();
+    let q = parts.len() - 1;
+    parts.insert(q, "[i] info".into());
+    parts.insert(q, format!("[drag] {}", app.drag_verb()));
+    loop {
+        for sep in ["   ", "  "] {
+            let s = parts.join(sep);
+            if s.chars().count() <= room {
+                return s;
+            }
+        }
+        let i = parts.len() - 2; // `[i] info`
+        if i == 0 {
+            return parts.join(" ").chars().take(room).collect();
+        }
+        parts.remove(i - 1);
+    }
+}
+
+fn draw_footer(cv: &mut Canvas, app: &App) {
+    let (w, y) = (cv.w as i32, cv.h as i32 - 1);
+    for x in 0..w {
+        cv.cells[y as usize * cv.w + x as usize] = Cell { ch: ' ', fg: None };
+    }
+    let age = format!("age {}", crate::stats::short(app.stats.age));
+    let ax = w - age.chars().count() as i32 - 1;
+    cv.text(ax, y, &age, DIM);
+    let line = footer_line(app, (ax - 2).max(0) as usize);
+    let n = line.chars().count() as i32;
+    let x0 = ((w - n) / 2).min(ax - 2 - n).max(0);
+    cv.text(x0, y, &line, DIM);
+}
+
+/// Rows and columns of the info card.
+pub const CARD_H: i32 = 9;
+pub const CARD_W: i32 = 30;
+
+/// The `i` info card, centered over the scene: kind and breed, then the session stats.
+fn draw_card(cv: &mut Canvas, app: &App) {
+    let (w, h) = (cv.w as i32, cv.h as i32);
+    let x0 = (w - CARD_W) / 2;
+    let y0 = ((h - 1 - CARD_H) / 2).max(0);
+    let a = cv.ascii;
+    let (hz, vt, tl, tr, bl, br) = if a {
+        ('-', '|', '+', '+', '+', '+')
+    } else {
+        (
+            '\u{2500}', '\u{2502}', '\u{256d}', '\u{256e}', '\u{2570}', '\u{256f}',
+        )
+    };
+    for y in y0..y0 + CARD_H {
+        for x in x0..x0 + CARD_W {
+            let edge_y = y == y0 || y == y0 + CARD_H - 1;
+            let edge_x = x == x0 || x == x0 + CARD_W - 1;
+            let ch = match (edge_y, edge_x) {
+                (true, true) => match (y == y0, x == x0) {
+                    (true, true) => tl,
+                    (true, false) => tr,
+                    (false, true) => bl,
+                    (false, false) => br,
+                },
+                (true, false) => hz,
+                (false, true) => vt,
+                _ => ' ',
+            };
+            cv.put(x, y, ch, DIM);
+            if x >= 0 && y >= 0 && (x as usize) < cv.w && (y as usize) < cv.h {
+                cv.owner[y as usize * cv.w + x as usize] = NONE;
+            }
+        }
+    }
+    let close = " [i] close ";
+    cv.text(
+        x0 + CARD_W - 2 - close.len() as i32,
+        y0 + CARD_H - 1,
+        close,
         DIM,
     );
-    cv
+    let inner = (CARD_W - 4) as usize;
+    let title: String = app.card_title(a).chars().take(inner).collect();
+    cv.text(x0 + 2, y0 + 1, &title, PEACH);
+    let s = &app.stats;
+    let rows = [
+        ("Age", crate::stats::long(s.age)),
+        ("Fed", s.fed.to_string()),
+        ("Petted", s.petted.to_string()),
+        ("Booped", s.booped.to_string()),
+        ("Ruffled", crate::stats::secs(s.ruffled)),
+        (app.drag_label(), crate::stats::secs(s.dragged)),
+    ];
+    for (i, (k, v)) in rows.iter().enumerate() {
+        let y = y0 + 2 + i as i32;
+        cv.text(x0 + 2, y, k, DIM);
+        cv.text(x0 + CARD_W - 2 - v.chars().count() as i32, y, v, PEACH);
+    }
 }
 
 fn draw_world(cv: &mut Canvas, app: &App) {

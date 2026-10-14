@@ -600,6 +600,12 @@ impl Pet for CatPet {
     fn stream_char(&self) -> char {
         '*'
     }
+    fn drag_label(&self) -> &'static str {
+        "Scratched"
+    }
+    fn drag_verb(&self) -> &'static str {
+        "scratch"
+    }
     fn hints(&self, social: bool) -> &'static str {
         if social {
             "[f] treat   [p] pet   [space] laser   [v] visit   [c] breed   [q] quit"

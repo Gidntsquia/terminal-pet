@@ -1169,6 +1169,12 @@ impl Pet for DogPet {
     fn stream_char(&self) -> char {
         '*'
     }
+    fn drag_label(&self) -> &'static str {
+        "Scritched"
+    }
+    fn drag_verb(&self) -> &'static str {
+        "scritch"
+    }
     fn hints(&self, social: bool) -> &'static str {
         if social {
             "[f] biscuit   [p] pet   [space] ball   [v] visit   [c] breed   [q] quit"

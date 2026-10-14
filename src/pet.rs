@@ -44,6 +44,10 @@ pub trait Pet: Sync {
     fn stream_char(&self) -> char;
     /// Bottom key hint line.
     fn hints(&self, social: bool) -> &'static str;
+    /// Info-card label for seconds of drag on this pet ("Scratched"); the squid's is "Cuddled".
+    fn drag_label(&self) -> &'static str;
+    /// The drag gesture as a verb for `--help` and the footer ("scratch").
+    fn drag_verb(&self) -> &'static str;
 
     // ---- reactions ----
     /// A counted feed / pet / play key press (the shared code has already set the message).
