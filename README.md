@@ -26,7 +26,7 @@ terminal-pet --pet cat   # The cat
 terminal-pet            # The squid (same as terminal-pet --pet squid)
 ```
 
-Press `f` to feed, `p` to pet, `space` to play, `c` to change color or breed, `v` to visit another pet, and `q` to quit. Click a pet to boop it, drag across it to stroke it, and scroll over it to ruffle it.
+Press `f` to feed, `p` to pet, `space` to play, `c` to change color or breed, `v` to visit another pet, `i` to open the info card (age and this session's feeds, pets, boops, ruffle and drag seconds; nothing is saved), and `q` to quit. Click a pet to boop it, drag across it to cuddle (squid), scratch (cat) or scritch (dog) it, and scroll over it to ruffle it.
 
 On Linux x86_64 you can skip Rust and download a prebuilt binary from the [releases page](https://github.com/Gidntsquia/terminal-pet/releases).
 
