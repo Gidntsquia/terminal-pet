@@ -757,9 +757,10 @@ impl App {
         let n = 1 + self.guests.len();
         let cx = self.geo().cx as f32;
         let order = self.order();
+        let (s0, s1) = self.pet().map_or((0.0, w), |p| p.stage(self));
         let mut done = vec![];
         for (k, who) in order.iter().enumerate() {
-            let sx = w * (k as f32 + 0.5) / n as f32;
+            let sx = s0 + (s1 - s0) * (k as f32 + 0.5) / n as f32;
             match who {
                 None => {
                     let target = if n == 1 { 0.0 } else { sx - cx };
@@ -804,7 +805,8 @@ impl App {
         let target = if n == 1 {
             1.0
         } else {
-            (w / (n as f32 * FOOT * full)).min(1.0)
+            let t = (w / (n as f32 * FOOT * full)).min(1.0);
+            self.pet().map_or(t, |p| p.visit_scale(self, t))
         };
         self.scale = target + (self.scale - target) * (-6.5 * dt).exp();
         if (self.scale - target).abs() < 0.002 {

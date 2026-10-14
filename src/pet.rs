@@ -80,6 +80,18 @@ pub trait Pet: Sync {
     fn guest_fit(&self, _app: &App, _guest: Kind) -> (f32, f32) {
         (1.0, 0.0)
     }
+    /// Columns (left, right) of the scene that the host and its guests line up on, evenly
+    /// spaced, e.g. the dog's lawn between the doghouse and the tree. The whole pane by
+    /// default.
+    fn stage(&self, app: &App) -> (f32, f32) {
+        (0.0, app.w as f32)
+    }
+    /// Size factor everyone shrinks to with guests visiting, given the engine's `target`
+    /// (from the pane width), so e.g. the dog and its guests fit on the lawn. `target` by
+    /// default.
+    fn visit_scale(&self, _app: &App, target: f32) -> f32 {
+        target
+    }
     /// Column a guest of kind `guest` settles at, given its evenly spaced slot `x`, so e.g.
     /// a visiting squid floats on the open lawn instead of over the doghouse.
     fn guest_x(&self, _app: &App, _guest: Kind, x: f32) -> f32 {
