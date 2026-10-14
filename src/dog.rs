@@ -221,7 +221,7 @@ pub const HOLE_FILL: f32 = 1.5;
 pub const CHASE_T: f32 = 2.4;
 
 /// Seconds the head takes to turn from the side view to the front face after stopping.
-pub const TURN_T: f32 = 0.6;
+pub const TURN_T: f32 = 0.25;
 
 /// Per-dog animation state that the squid does not have.
 #[derive(Default)]
@@ -2136,8 +2136,22 @@ mod tests {
             turns.push(a.dog_pose().turn);
         }
         let mid = turns.iter().filter(|&&t| t > 0.2 && t < 0.9).count();
-        assert!(mid >= 4, "turn frames {turns:?}");
+        assert!(mid >= 2, "turn frames {turns:?}");
         assert!(turns.windows(2).all(|w| w[1] >= w[0]), "{turns:?}");
+        // the body turns with the head: mid-turn it is narrower than the side view
+        let span = |t: f32| {
+            let mut b = dog(w, h, 5).dog_host_body();
+            b.dpose.up = true;
+            b.dpose.turn = t;
+            let mut cv = crate::art::Canvas::new(w, h, false);
+            crate::dog_art::draw_dog(&mut cv, &b);
+            let xs: Vec<usize> = (0..cv.cells.len())
+                .filter(|&i| cv.cells[i].fg.is_some())
+                .map(|i| i % cv.w)
+                .collect();
+            xs.iter().max().unwrap() - xs.iter().min().unwrap()
+        };
+        assert!(span(0.5) < span(0.0), "{} {}", span(0.5), span(0.0));
     }
 
     #[test]

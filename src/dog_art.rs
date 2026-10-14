@@ -2060,7 +2060,13 @@ pub fn draw_dog(cv: &mut Canvas, body: &Body) {
 fn draw_stand(cv: &mut Canvas, body: &Body, side: bool) {
     let (w, h) = (cv.w as u16, cv.h as u16);
     let p = &body.dpose;
-    let r = stand_rig(body, w, h);
+    let mut r = stand_rig(body, w, h);
+    if !side {
+        // turning to face the viewer: the whole body narrows with the head (three-quarter)
+        let q = 1.0 - smooth(0.0, 1.0, p.turn.clamp(0.0, 1.0));
+        r.sq = (1.0 - 0.45 * q).max(0.5);
+    }
+    let r = r;
     let m = r.m;
     let (uf, uh) = (0.58 * r.ru, -0.6 * r.ru);
     // front legs: dig alternates them backwards
