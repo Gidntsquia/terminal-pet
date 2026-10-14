@@ -37,6 +37,7 @@ terminal-pet --pet cat --breed siamese   # Also tabby, black, calico, orange, tu
 terminal-pet --color purple                 # Also red, blue, pink, green, gold, ghost, blue-ringed
 terminal-pet --ascii                        # Draws without Unicode glyphs
 terminal-pet --solo                         # Don't look for other pets
+terminal-pet --pet dog --nap                # Dog starts asleep in the doghouse (ignored for other pets)
 terminal-pet --no-mouse                     # Don't capture the mouse
 terminal-pet --seed 42                      # Same random behavior every run
 NO_COLOR=1 terminal-pet                     # Monochrome

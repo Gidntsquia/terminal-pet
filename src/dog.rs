@@ -240,6 +240,8 @@ pub struct DogState {
     pub bark_t: f32,
     /// How far (0..1) the dog has gone into the doghouse.
     pub nap_k: f32,
+    /// `--nap`: stay asleep in the doghouse until something wakes the dog.
+    pub nap_hold: bool,
     /// Play: ball target in cells from the start spot, and the side the ball was thrown to.
     pub ball_dx: f32,
     pub was_play: bool,
@@ -467,6 +469,15 @@ impl App {
         self.dog.bag.pop().unwrap_or(Behavior::Sniff)
     }
 
+    /// Start asleep in the doghouse (`--nap`).
+    pub fn dog_start_asleep(&mut self) {
+        self.state = State::IdleBehavior(Behavior::Nap);
+        self.st = 0.0;
+        self.dog_start_idle(Behavior::Nap);
+        self.dog.nap_k = 1.0;
+        self.dog.nap_hold = true;
+    }
+
     fn dog_start_idle(&mut self, b: Behavior) {
         let ox = self.offset().0;
         let x = self.geo().cx as f32 + ox;
@@ -509,6 +520,13 @@ impl App {
         self.dog.bark_t = (self.dog.bark_t - dt).max(0.0);
         self.dog.warm = (self.dog.warm - dt).max(0.0);
         self.dog.chase.1 = (self.dog.chase.1 - dt).max(0.0);
+        if self.dog.nap_hold {
+            if matches!(self.state, State::IdleBehavior(Behavior::Nap)) {
+                self.st = 0.0;
+            } else {
+                self.dog.nap_hold = false;
+            }
+        }
         // nap: walk to the door, stay in, walk out
         let want = match self.state {
             State::IdleBehavior(Behavior::Nap) => {
@@ -1032,7 +1050,10 @@ impl App {
     /// Draw data for the host dog.
     pub fn dog_host_body(&self) -> Body {
         let g = self.geo();
-        let (dx, dy) = self.offset();
+        let (dx, mut dy) = self.offset();
+        dy += (crate::dog_art::horizon(self.w, self.h) - crate::dog_art::ground(self.w, self.h).0)
+            as f32
+            * ease(self.dog.nap_k.clamp(0.0, 1.0));
         let pose = self.dog_pose();
         Body {
             kind: Kind::Dog,
@@ -1877,7 +1898,7 @@ mod tests {
             }
             assert!(a.dog_pose().inside, "{w}x{h}");
             // only the head shows, inside the door, no lower than its floor row
-            let base = da::ground(w, h).0 - 1;
+            let base = da::horizon(w, h) - 1;
             let cells = dog_cells(&a);
             assert!(cells.len() > 10, "{w}x{h}: head missing");
             let (_, hd) = da::seat_dims(w, h, da::NAP_SCALE);

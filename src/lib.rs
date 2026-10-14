@@ -55,6 +55,7 @@ pub fn cli() -> io::Result<()> {
     };
     let mut ascii = false;
     let mut solo = false;
+    let mut nap = false;
     let mut mouse = true;
     let mut seed = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -93,6 +94,7 @@ pub fn cli() -> io::Result<()> {
         match a.as_str() {
             "--ascii" => ascii = true,
             "--solo" => solo = true,
+            "--nap" => nap = true,
             "--no-mouse" => mouse = false,
             "--seed" => seed = args.next().and_then(|s| s.parse().ok()).unwrap_or(seed),
             "-h" | "--help" => {
@@ -153,7 +155,7 @@ pub fn cli() -> io::Result<()> {
     if mouse {
         execute!(stdout(), EnableMouseCapture)?;
     }
-    let res = run(ascii, seed, mode, (pet, choice, bchoice), solo);
+    let res = run(ascii, seed, mode, (pet, choice, bchoice), solo, nap);
     restore();
     res
 }
@@ -186,6 +188,7 @@ fn run(
     mode: Mode,
     (pet, choice, bchoice): (Kind, ColorChoice, Result<usize, ()>),
     solo: bool,
+    nap: bool,
 ) -> io::Result<()> {
     let mut term = Terminal::new(CrosstermBackend::new(stdout()))?;
     let size = term.size()?;
@@ -203,6 +206,9 @@ fn run(
             ColorChoice::Preset(i) => app.init_color(i, false),
             ColorChoice::Random => app.init_color(random_preset(seed), !app.mono),
         }
+    }
+    if nap && pet == Kind::Dog {
+        app.dog_start_asleep();
     }
     let link = if solo { None } else { link::Link::open() };
     if let Some(l) = &link {
@@ -377,7 +383,7 @@ fn breeds_of(name: &str) -> String {
 
 fn help(prog: &str) -> String {
     format!(
-        "{prog} - a giant ASCII pet for your terminal: a squid, a cat or a dog\n\nUSAGE: {prog} [--pet squid|cat|dog] [--ascii] [--solo] [--no-mouse] [--seed N] [--color NAME | --breed NAME]\n\n  --pet KIND    which pet: squid (default), cat or dog\n  --color NAME  squid color: {}\n  --breed NAME  cat breed: {}\n                dog breed: {}\n  --solo        don't look for other pets in other terminals\n  --no-mouse    don't capture the mouse (keeps terminal text selection)\n\nKeys: i info card (age and counts this session; i or Esc closes it), f feed (squid) / treat (cat) / biscuit (dog), p pet, space play (squid) / laser dot (cat) / ball and bark (dog), c color / breed, v visit a neighbor (or call your guest/visitor home), q/Esc quit\nMouse: click = boop, drag across the pet = cuddle (squid) / scratch (cat) / scritch (dog), scroll wheel over it = ruffle / shake-off\n\nPets in other terminals on this machine find each other automatically (squid, cat and dog can all visit each other): they\nvisit (on their own every 20-30 minutes, with a 10 minute pause after a visit; or press v any time) and share treats, fish, motes, bubbles, ink, pounces and barks. Repeated f/p/space presses stack up. Use --solo to stay on your own.",
+        "{prog} - a giant ASCII pet for your terminal: a squid, a cat or a dog\n\nUSAGE: {prog} [--pet squid|cat|dog] [--ascii] [--solo] [--nap] [--no-mouse] [--seed N] [--color NAME | --breed NAME]\n\n  --pet KIND    which pet: squid (default), cat or dog\n  --color NAME  squid color: {}\n  --breed NAME  cat breed: {}\n                dog breed: {}\n  --solo        don't look for other pets in other terminals\n  --nap         dog only: start asleep in the doghouse\n  --no-mouse    don't capture the mouse (keeps terminal text selection)\n\nKeys: i info card (age and counts this session; i or Esc closes it), f feed (squid) / treat (cat) / biscuit (dog), p pet, space play (squid) / laser dot (cat) / ball and bark (dog), c color / breed, v visit a neighbor (or call your guest/visitor home), q/Esc quit\nMouse: click = boop, drag across the pet = cuddle (squid) / scratch (cat) / scritch (dog), scroll wheel over it = ruffle / shake-off\n\nPets in other terminals on this machine find each other automatically (squid, cat and dog can all visit each other): they\nvisit (on their own every 20-30 minutes, with a 10 minute pause after a visit; or press v any time) and share treats, fish, motes, bubbles, ink, pounces and barks. Repeated f/p/space presses stack up. Use --solo to stay on your own.",
         color_list(),
         breeds_of("cat"),
         breeds_of("dog")

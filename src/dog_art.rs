@@ -39,15 +39,23 @@ pub fn ground(w: u16, h: u16) -> (i32, i32) {
     let h = h as i32;
     let fh = if h < 20 { 2 } else { 4 };
     let fence_top = h - 2 - fh;
-    let feet = ((h as f32 * 0.70).round() as i32).min(fence_top - 2).max(5);
+    let feet = (h - 3).max(5);
     (feet, fence_top)
+}
+
+/// Row of the back horizon (grass line, fence bottom, house/tree/bush feet): about 55% of
+/// the pane, at least 3 rows above the dog's feet row.
+pub fn horizon(w: u16, h: u16) -> i32 {
+    let (feet, _) = ground(w, h);
+    ((h as f32 * 0.55).round() as i32).min(feet - 3).max(3)
 }
 
 /// Seated dog: (width in columns, height in rows). Height follows the pane rows like the
 /// cat's `geo_cat`; width follows the height but never more than a third of the pane.
 pub fn seat_dims(w: u16, h: u16, scale: f32) -> (f32, f32) {
-    let (feet, _) = ground(w, h);
-    let hh = ((h as f32 * 0.68 * scale).round() as i32).clamp(6, (feet - 2).max(6)) as f32;
+    // the dog's size is unchanged from when its feet stood at 70% of the pane
+    let old_feet = ((h as f32 * 0.70).round() as i32).max(5);
+    let hh = ((h as f32 * 0.68 * scale).round() as i32).clamp(6, (old_feet - 2).max(6)) as f32;
     let ww = (hh * 1.2).min(w as f32 * 0.32).max(8.0);
     (ww, hh)
 }
@@ -104,7 +112,7 @@ pub fn door(w: u16, h: u16) -> (i32, i32, i32) {
 /// Is cell (x, y) inside the door opening?
 pub(crate) fn in_door(w: u16, h: u16, x: i32, y: i32) -> bool {
     let (dx0, dw, dh) = door(w, h);
-    let base = ground(w, h).0 - 1;
+    let base = horizon(w, h) - 1;
     let i = base - y;
     if !(0..dh).contains(&i) {
         return false;
@@ -123,7 +131,7 @@ pub fn house_right(w: u16, h: u16) -> i32 {
 /// Cells beside the roof are open sky, so a dog behind the house still shows there.
 fn house_covers(w: u16, h: u16, x: i32, y: i32) -> bool {
     let (x0, hw, wall, roof) = house(w, h);
-    let base = ground(w, h).0 - 1;
+    let base = horizon(w, h) - 1;
     if y > base {
         return false;
     }
@@ -161,7 +169,7 @@ pub fn seat_half(w: u16, h: u16) -> f32 {
 /// starts right of the seated dog (tail and idle drift included).
 pub(crate) fn tree(w: u16, h: u16) -> (i32, i32, f32, f32, f32) {
     let (ww, hh) = seat_dims(w, h, 1.0);
-    let (feet, _) = ground(w, h);
+    let feet = horizon(w, h);
     let wi = w as i32;
     let tw = ((ww * 0.13).round() as i32).max(3);
     let tx = wi - 2 - tw / 2;
@@ -190,9 +198,8 @@ fn idle_room(w: u16, h: u16) -> f32 {
 /// Back fence: (top row, bottom row). Pickets are about 0.3 of the seated dog's height and
 /// stand on the horizon line behind the dog.
 pub(crate) fn fence(w: u16, h: u16) -> (i32, i32) {
-    let (feet, _) = ground(w, h);
     let (_, hh) = seat_dims(w, h, 1.0);
-    let horizon = (feet).max(3);
+    let horizon = self::horizon(w, h);
     let fh = ((0.3 * hh).round() as i32).clamp(2, horizon);
     (horizon - fh, horizon - 1)
 }
@@ -201,7 +208,8 @@ pub(crate) fn fence(w: u16, h: u16) -> (i32, i32) {
 
 pub fn draw_yard(cv: &mut Canvas, app: &App) {
     let (w, h) = (cv.w as i32, cv.h as i32);
-    let (feet, _) = ground(app.w, app.h);
+    let (dfeet, _) = ground(app.w, app.h);
+    let feet = horizon(app.w, app.h);
     let (ww, hh) = seat_dims(app.w, app.h, 1.0);
     let t = app.t;
     let (tx, tw, ccy, rv, ru) = tree(app.w, app.h);
@@ -255,7 +263,7 @@ pub fn draw_yard(cv: &mut Canvas, app: &App) {
         cv.text(cx, row + 1, &bot, CLOUD);
     }
     // back fence on the horizon, behind everything in the yard
-    let horizon = (feet).max(3);
+    let horizon = feet;
     let (ftop, fbot) = fence(app.w, app.h);
     let fh = fbot - ftop + 1;
     for y in ftop..=fbot {
@@ -286,6 +294,20 @@ pub fn draw_yard(cv: &mut Canvas, app: &App) {
             };
             let c = if k % 5 < 2 { GRASS } else { GRASS_D };
             cv.put(x, y, ch, c);
+        }
+    }
+    // shadow under the seated dog: darker, denser tufts one row high at the paw row
+    {
+        let cx = w / 2 + app.dog_dx() as i32;
+        let half = (0.5 * ww) as i32;
+        for x in (cx - half)..=(cx + half) {
+            let k = hash(x + 77, dfeet);
+            cv.put(
+                x,
+                dfeet - 1,
+                if k.is_multiple_of(3) { '"' } else { ',' },
+                GRASS_D,
+            );
         }
     }
     // tree on the right
@@ -977,7 +999,31 @@ fn draw_sit_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
     };
     for s in [-1.0f32, 1.0] {
         let eu = hu + s * ex + shift;
-        if body.closed || body.blink {
+        let nap = body.closed && (body.scale - NAP_SCALE).abs() < 0.01;
+        if nap {
+            // asleep: a dark `u` lid line per eye, 3 cells on a wide head, 2, or one
+            let wide = if ex >= 3.0 {
+                8.0
+            } else if ex >= 2.5 {
+                5.0
+            } else {
+                0.0
+            };
+            let cells: &[(f32, char, char)] = if wide >= 8.0 {
+                &[
+                    (-1.0, '\u{2570}', '\\'),
+                    (0.0, '\u{2500}', '_'),
+                    (1.0, '\u{256f}', '/'),
+                ]
+            } else if wide >= 5.0 {
+                &[(-0.5, '\u{2570}', '\\'), (0.5, '\u{256f}', '/')]
+            } else {
+                &[(0.0, 'u', 'u')]
+            };
+            for &(du, ch, a) in cells {
+                r.stamp(cv, eu + du, ev, if cv.ascii { a } else { ch }, dark);
+            }
+        } else if body.closed || body.blink {
             // closed lid: the cell is lid skin with a thin dark gap along its top edge (the lash line), so
             // it reads as a slit under a lid, not a hole; one `-` per eye in ascii
             let skin = shade(b.coat, 1.0);
@@ -1246,6 +1292,11 @@ fn lie_head(cv: &mut Canvas, r: &Rig, body: &Body, d: &LieDims, v: f32, tilt: f3
     }
     let s = head_sprite(&hb, w, h, cv.ascii, true, r.f);
     // long ears may drape onto the lawn in front; upside down they fold on the grass
+    // the head is raised if its ears would hang past the last lawn row above the message row
+    let low = s.iter().map(|c| c.1).max().unwrap_or(0);
+    let bottom = (r.oy - v).round() as i32 + low;
+    let over = (bottom - (cv.h as i32 - 3)).max(0) as f32;
+    let v = if flip { v } else { v + over };
     paste(r, cv, &s, (d.hc, v), flip, if flip { 0.0 } else { -6.0 });
     if flip {
         let mv = v + d.hrv * 0.42;
@@ -2134,6 +2185,7 @@ fn draw_stand(cv: &mut Canvas, body: &Body, side: bool) {
 /// floor), eyes closed, body hidden behind the wall.
 fn inside_body(body: &Body, w: u16, h: u16) -> Body {
     let mut b2 = body.clone();
+    let lift = (horizon(w, h) - ground(w, h).0) as f32;
     b2.dpose = crate::dog::DogPose {
         ..Default::default()
     };
@@ -2142,7 +2194,7 @@ fn inside_body(body: &Body, w: u16, h: u16) -> Body {
     b2.scale = NAP_SCALE;
     let (_, hn) = seat_dims(w, h, NAP_SCALE);
     // the chin sits 0.565 of the seated height above the feet row
-    b2.dy = 0.565 * hn - 0.5;
+    b2.dy = lift + 0.565 * hn - 0.5;
     b2.cx = 0;
     b2.dx = door_x(w, h);
     b2
@@ -2156,7 +2208,7 @@ fn draw_inside(cv: &mut Canvas, body: &Body) {
 /// Zzz drifting up from the roof top of the doghouse the dog naps in.
 fn draw_zzz(cv: &mut Canvas, body: &Body, w: u16, h: u16) {
     let (x0, hw, wall, roof) = house(w, h);
-    let base = ground(w, h).0 - 1;
+    let base = horizon(w, h) - 1;
     let top = base - wall - roof;
     let cx = x0 + hw / 2;
     for i in 0..3 {
@@ -2319,6 +2371,20 @@ pub fn draw_props(cv: &mut Canvas, app: &App) {
             if depth > 0.5 {
                 cv.put(xi + wd + 2, y - 1, '.', DIRT);
                 cv.put(xi + wd + 3, y, '\u{2584}', DIRT);
+            }
+        }
+    }
+    // grass in front: tufts over the bottom row of the paws so they sink into the lawn
+    let y = feet - 1;
+    if y >= 0 && (y as usize) < cv.h {
+        for x in 0..cv.w as i32 {
+            let i = y as usize * cv.w + x as usize;
+            if cv.cells[i].fg.is_some() && cv.cells[i].ch != ' ' && cv.owner[i] != crate::art::NONE
+            {
+                let k = hash(x + 5, y);
+                if k.is_multiple_of(3) {
+                    cv.put(x, y, if k.is_multiple_of(2) { '"' } else { ',' }, GRASS);
+                }
             }
         }
     }
