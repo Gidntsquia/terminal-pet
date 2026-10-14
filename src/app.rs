@@ -1595,7 +1595,7 @@ mod tests {
                     .position(|r| r.contains(if ascii { "+---" } else { "\u{256d}" }))
                     .unwrap();
                 assert!(
-                    top + crate::art::CARD_H as usize <= h as usize - 1,
+                    top + (crate::art::CARD_H as usize) < h as usize,
                     "{w}x{h} card over footer"
                 );
                 assert!(
