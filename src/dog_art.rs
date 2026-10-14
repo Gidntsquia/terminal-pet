@@ -888,11 +888,17 @@ fn draw_sit_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
     let p = &body.dpose;
     let (hu, hv, hru, hrv) = (r.hu, r.hv, r.hru, r.hrv);
     let face = if p.spin < 0.0 { -1.0 } else { 1.0 };
+    // turning from the side view: the face slides toward `face` (three-quarter view) and
+    // the eyes close up, easing back to the front face as `turn` reaches 1
+    let q = 1.0 - smooth(0.0, 1.0, p.turn.clamp(0.0, 1.0));
+    let fo = face * q * 0.45 * hru;
+    let squeeze = 1.0 - 0.5 * q;
     // ears behind the head: pointed and up, or floppy at the sides
     let eard = 0.0;
     for s in [-1.0f32, 1.0] {
         let tilt = if s == face { p.tilt * 0.8 } else { 0.0 };
         let c = shade(b.dark, -0.8);
+        let hu = hu - 0.5 * fo;
         if b.ears_up {
             let eh = (0.17 * hh).max(2.0);
             let eu = hu + s * hru * 0.6;
@@ -965,6 +971,7 @@ fn draw_sit_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
         b.light
     };
     let (mv, mru, mrv) = (hv - hrv * 0.42, hru * 0.38, (hrv * 0.36).max(1.0));
+    let hu = hu + fo;
     r.ell(cv, (hu, mv), (mru, mrv), &|_, _, _, _| ('\u{2588}', muz));
     r.stamp(cv, hu - 0.5, mv + mrv * 0.55, '\u{2588}', b.nose);
     r.stamp(cv, hu + 0.5, mv + mrv * 0.55, '\u{2588}', b.nose);
@@ -978,7 +985,7 @@ fn draw_sit_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
         }
     }
     // big wide-set eyes with a shine, rosy cheeks; eyes follow the look direction
-    let ex = (0.5 * hru).max(2.0);
+    let ex = (0.5 * hru).max(2.0) * squeeze;
     let ev = hv + 0.12 * hrv;
     let shift = 0.5 * face;
     let dark = (0x18, 0x12, 0x14);
@@ -999,7 +1006,7 @@ fn draw_sit_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
         }
         r.stamp(
             cv,
-            hu + s * (ex + 0.28 * hru),
+            hu + s * (ex + 0.28 * hru * squeeze),
             hv - 0.3 * hrv,
             '\u{2592}',
             (0xF0, 0x90, 0xA0),
@@ -1251,16 +1258,18 @@ fn lie_head(cv: &mut Canvas, r: &Rig, body: &Body, d: &LieDims, v: f32, tilt: f3
         hb.dpose.tongue = 0.0;
         hb.dpose.open = 0.0;
     }
-    let s = head_sprite(&hb, w, h, cv.ascii, false, r.f);
+    let s = head_sprite(&hb, w, h, cv.ascii, true, r.f);
     // long ears may drape onto the lawn in front; upside down they fold on the grass
     paste(r, cv, &s, (d.hc, v), flip, if flip { 0.0 } else { -6.0 });
     if flip {
         let mv = v + d.hrv * 0.42;
+        // the tongue flops out past the upside-down snout tip, down toward the grass
+        let tip = d.hc + d.hru + 1.6;
         for k in 0..3 {
             r.stamp(
                 cv,
-                d.hc + 0.3 * d.hru + k as f32,
-                mv + 0.6 + (k as f32 * 0.5).floor(),
+                tip - 0.5 + k as f32,
+                mv - (k as f32 * 0.5).floor(),
                 '\u{2588}',
                 TONGUE,
             );
@@ -1950,7 +1959,9 @@ fn draw_profile_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
     // the seated eye with its white shine, and the blush below and behind it
     let (eu, ev) = (hu + 0.42 * hru, hv + 0.12 * hrv);
     let dark = (0x18, 0x12, 0x14);
-    if body.closed || body.blink {
+    // on the move the eye stays open with its shine (no blink mid-stride)
+    let moving = p.walking || p.running;
+    if (body.closed || body.blink) && !moving {
         r.stamp(cv, eu - 0.5, ev, '\u{2580}', dark);
         r.stamp(cv, eu + 0.5, ev, '\u{2580}', dark);
     } else {
@@ -2018,7 +2029,7 @@ fn draw_profile_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
 
 /// Where the standing dog's mouth is (local coordinates).
 fn stand_mouth(r: &Rig, p: &crate::dog::DogPose) -> (f32, f32) {
-    if profile(p) {
+    if profile(p) || p.turn < 0.15 {
         let (mcu, mcv, mru, mrv) = snout(r);
         (r.hu + mcu + mru - 2.0, r.hv + mcv - mrv - 0.3)
     } else {
@@ -2042,7 +2053,7 @@ pub fn draw_dog(cv: &mut Canvas, body: &Body) {
         draw_sit(cv, body);
         return;
     }
-    draw_stand(cv, body, profile(p));
+    draw_stand(cv, body, profile(p) || p.turn < 0.15);
 }
 
 /// The standing dog; `side` draws the head in profile, else the seated front face.
@@ -2281,7 +2292,8 @@ pub fn mouth_pos(app: &App, body: &Body) -> (f32, f32) {
         } else {
             hv - 0.42 * d.hrv
         };
-        let (x, y) = r.xy(d.hc, mv);
+        // the profile snout pokes out toward the way the dog faces
+        let (x, y) = r.xy(d.hc + 0.8 * d.hru, mv);
         return (x as f32, y as f32);
     }
     let r = stand_rig(body, app.w, app.h);

@@ -220,6 +220,9 @@ pub const HOLE_FILL: f32 = 1.5;
 /// Seconds the dog chases a toy mouse.
 pub const CHASE_T: f32 = 2.4;
 
+/// Seconds the head takes to turn from the side view to the front face after stopping.
+pub const TURN_T: f32 = 0.6;
+
 /// Per-dog animation state that the squid does not have.
 #[derive(Default)]
 pub struct DogState {
@@ -247,6 +250,11 @@ pub struct DogState {
     pub clear_dx: f32,
     /// Widest half-width (columns) each kind of guest was seen drawn at, and the pane size.
     pub guest_half: Vec<(Kind, u16, u16, f32)>,
+    /// 1 right after a side-view frame, easing to 0 as the head turns to face the viewer.
+    pub sideways: f32,
+    /// The side view came from walking or running (stay on its feet while turning), not
+    /// from a roll-over (which sits down by itself).
+    pub turn_up: bool,
 }
 
 /// Everything about the dog's pose that is not already in `Body`.
@@ -288,6 +296,9 @@ pub struct DogPose {
     pub nap: f32,
     /// Held on its feet (roll-over, pet) even when nothing else says so.
     pub up: bool,
+    /// 0..1 how far the head has turned from the side view to the front face after the
+    /// dog stops (1 = facing the viewer).
+    pub turn: f32,
 }
 
 impl DogPose {
@@ -413,6 +424,7 @@ impl Default for DogPose {
             sniff: 0.0,
             nap: 0.0,
             up: false,
+            turn: 1.0,
         }
     }
 }
@@ -998,6 +1010,11 @@ impl App {
         p.happy_on_the_move();
         p.nap = self.dog.nap_k;
         p.up = self.pet.on;
+        // after moving, the dog stays on its feet while its head turns to the viewer
+        p.turn = 1.0 - self.dog.sideways;
+        if p.roll == 0.0 && self.dog.sideways > 0.0 && self.dog.turn_up {
+            p.up = true;
+        }
         p
     }
 
@@ -1121,6 +1138,18 @@ impl Pet for DogPet {
             app.next_burst = app.next_burst.max(app.t + 2.5);
         }
         app.dog_update(dt);
+        // side view while moving, spinning or rolling; then the head turns to the front
+        let p = app.dog_pose();
+        let moving = p.walking || p.running || p.spin.abs() < 0.999;
+        let side = moving || p.roll_pose().is_some_and(|(r, _)| r != RollPose::Sit);
+        if side {
+            app.dog.turn_up = moving;
+        }
+        app.dog.sideways = if side {
+            1.0
+        } else {
+            (app.dog.sideways - dt / TURN_T).max(0.0)
+        };
         if app.t >= app.dog.next_wag + 0.8 {
             app.dog.next_wag = app.t + app.rng.random_range(3.0..8.0);
         }
@@ -2067,6 +2096,50 @@ mod tests {
     /// long, nose to rump, as the seated dog is tall (a row looks two columns tall); and the
     /// legs are as many columns thick as the seated front leg.
     #[test]
+    fn walk_eye_keeps_its_shine_and_the_head_turns_gradually() {
+        let (w, h) = (120u16, 40u16);
+        let shine = |body: &Body| {
+            let mut cv = crate::art::Canvas::new(w, h, false);
+            crate::dog_art::draw_dog_into(&mut cv, body, false, 0, w, h);
+            cv.cells
+                .iter()
+                .filter(|c| c.ch == '\u{25cf}' && c.fg == Some((255, 255, 255)))
+                .count()
+        };
+        for breed in 0..BREEDS.len() {
+            let mut a = dog(w, h, 5);
+            a.init_color(breed, false);
+            let base = a.dog_host_body();
+            for k in 0..8 {
+                let mut b = base.clone();
+                b.blink = true;
+                b.dpose.walking = k % 2 == 0;
+                b.dpose.running = k % 2 == 1;
+                b.dpose.step = k as f32 * 0.4;
+                assert_eq!(
+                    shine(&b),
+                    1,
+                    "breed {breed}: walk frame {k} lost the eye shine"
+                );
+            }
+        }
+        // after a fetch run the head turns over several frames, not in one swap
+        let mut a = dog(w, h, 5);
+        a.state = State::Idle;
+        a.dog.sideways = 1.0;
+        a.dog.turn_up = true;
+        let mut turns = vec![];
+        for _ in 0..16 {
+            a.update(1.0 / 16.0);
+            a.state = State::Idle;
+            turns.push(a.dog_pose().turn);
+        }
+        let mid = turns.iter().filter(|&&t| t > 0.2 && t < 0.9).count();
+        assert!(mid >= 4, "turn frames {turns:?}");
+        assert!(turns.windows(2).all(|w| w[1] >= w[0]), "{turns:?}");
+    }
+
+    #[test]
     fn every_frame_is_the_seated_dog() {
         use crate::dog_art::{PASTED, leg_frac, seat_dims, seated_head};
         let (w, h) = (120u16, 40u16);
@@ -2195,12 +2268,12 @@ mod tests {
                     }),
                     true,
                 ),
-                ("down", Box::new(|p| p.roll = 1.5), false),
-                ("sideA", Box::new(|p| p.roll = 2.5), false),
-                ("twistA", Box::new(|p| p.roll = 3.5), false),
-                ("back", Box::new(|p| p.roll = 4.5), false),
-                ("twistB", Box::new(|p| p.roll = 5.5), false),
-                ("sideB", Box::new(|p| p.roll = 6.5), false),
+                ("down", Box::new(|p| p.roll = 1.5), true),
+                ("sideA", Box::new(|p| p.roll = 2.5), true),
+                ("twistA", Box::new(|p| p.roll = 3.5), true),
+                ("back", Box::new(|p| p.roll = 4.5), true),
+                ("twistB", Box::new(|p| p.roll = 5.5), true),
+                ("sideB", Box::new(|p| p.roll = 6.5), true),
                 ("up", Box::new(|p| p.roll = 7.5), true),
             ];
             for (name, f, side) in &poses {
