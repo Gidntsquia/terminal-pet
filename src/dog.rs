@@ -1009,7 +1009,8 @@ impl App {
         p.walking &= !p.running;
         p.happy_on_the_move();
         p.nap = self.dog.nap_k;
-        p.up = self.pet.on;
+        // held up by the roll-over only while it plays (it ends sitting)
+        p.up = self.pet.on && p.roll > 0.0;
         // after moving, the dog stays on its feet while its head turns to the viewer
         p.turn = 1.0 - self.dog.sideways;
         if p.roll == 0.0 && self.dog.sideways > 0.0 && self.dog.turn_up {
