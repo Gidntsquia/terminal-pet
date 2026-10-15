@@ -2953,4 +2953,162 @@ mod tests {
         }
         std::fs::write(path, out).unwrap();
     }
+
+    /// Cells of each eye (iris + shine) of the seated head, as (x, y) sets, left then right.
+    fn eye_cells(body: &Body, w: u16, h: u16) -> [Vec<(i32, i32)>; 2] {
+        let b = &BREEDS[body.breed];
+        let dark = (0x18, 0x12, 0x14);
+        let iris = if b.eye.0 as u32 + b.eye.1 as u32 + b.eye.2 as u32 > 200 {
+            b.eye
+        } else {
+            dark
+        };
+        let cells: Vec<(i32, i32)> = crate::dog_art::seated_head(body, w, h, false)
+            .iter()
+            .filter(|c| {
+                c.2.fg == Some(iris) && c.2.ch == '\u{2588}'
+                    || c.2.ch == '\u{25cf}' && c.2.fg == Some((255, 255, 255))
+            })
+            .map(|c| (c.0, c.1))
+            .collect();
+        // split at the widest gap in x
+        let mut xs: Vec<i32> = cells.iter().map(|c| c.0).collect();
+        xs.sort();
+        xs.dedup();
+        let cut = xs
+            .windows(2)
+            .max_by_key(|p| p[1] - p[0])
+            .map(|p| p[0])
+            .unwrap_or(0);
+        let left = cells.iter().copied().filter(|c| c.0 <= cut).collect();
+        let right = cells.iter().copied().filter(|c| c.0 > cut).collect();
+        [left, right]
+    }
+
+    #[test]
+    fn seated_eyes_are_the_same_size() {
+        let norm = |v: &[(i32, i32)], mirror: bool| {
+            let mut v: Vec<(i32, i32)> = v
+                .iter()
+                .map(|&(x, y)| (if mirror { -x } else { x }, y))
+                .collect();
+            let x0 = v.iter().map(|c| c.0).min().unwrap();
+            for c in v.iter_mut() {
+                c.0 -= x0;
+            }
+            v.sort();
+            v
+        };
+        let mut sizes: Vec<(u16, u16)> = vec![];
+        for w in 60..=90 {
+            for h in 20..=24 {
+                sizes.push((w, h));
+            }
+        }
+        sizes.extend([(60, 28), (80, 24), (120, 40), (122, 56), (200, 60)]);
+        for (w, h) in sizes {
+            for (breed, br) in BREEDS.iter().enumerate() {
+                let mut a = dog(w, h, 5);
+                a.init_color(breed, false);
+                let mut body = a.dog_host_body();
+                body.closed = false;
+                body.blink = false;
+                let [l, r] = eye_cells(&body, w, h);
+                // the same size: equal cell counts, and the iris outlines are mirror images
+                assert_eq!(
+                    l.len(),
+                    r.len(),
+                    "{w}x{h} {}: eye cells {l:?} {r:?}",
+                    br.name
+                );
+                let lw =
+                    l.iter().map(|c| c.0).max().unwrap() - l.iter().map(|c| c.0).min().unwrap();
+                let rw =
+                    r.iter().map(|c| c.0).max().unwrap() - r.iter().map(|c| c.0).min().unwrap();
+                assert_eq!(lw, rw, "{w}x{h} {}: eye widths", br.name);
+                assert_eq!(
+                    norm(&l, true),
+                    norm(&r, false),
+                    "{w}x{h} {}: eyes mirror",
+                    br.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nap_lids_keep_fur_between_them_and_the_nose() {
+        use crate::dog_art::NAP_FACE;
+        let mut sizes: Vec<(u16, u16)> = vec![];
+        for w in (60..=90).step_by(2) {
+            for h in 20..=24 {
+                sizes.push((w, h));
+            }
+        }
+        sizes.extend([(60, 28), (80, 24), (120, 40), (122, 56), (200, 60)]);
+        for (w, h) in sizes {
+            for (breed, br) in BREEDS.iter().enumerate() {
+                for ascii in [false, true] {
+                    let mut a = dog(w, h, 7);
+                    a.init_color(breed, false);
+                    a.dog_start_asleep();
+                    for f in 0..48 {
+                        a.update(1.0 / 16.0);
+                        if f % 4 != 0 {
+                            continue;
+                        }
+                        let body = a.dog_host_body();
+                        assert!(body.dpose.inside, "{w}x{h}: asleep inside");
+                        NAP_FACE.with(|n| n.borrow_mut().clear());
+                        let mut cv = crate::art::Canvas::new(w, h, ascii);
+                        crate::dog_art::draw_dog_into(&mut cv, &body, false, 0, w, h);
+                        let face = NAP_FACE.with(|n| n.borrow().clone());
+                        let lids: Vec<_> = face.iter().filter(|c| c.0 == 0).collect();
+                        let mut nose: Vec<_> = face.iter().filter(|c| c.0 == 1).collect();
+                        nose.sort();
+                        nose.dedup();
+                        let name = br.name;
+                        assert!(
+                            lids.len() >= 2 && nose.len() == 2,
+                            "{w}x{h} {name}: {face:?}"
+                        );
+                        let at = |x: i32, y: i32| cv.cells[y as usize * cv.w + x as usize];
+                        for l in &lids {
+                            for n in &nose {
+                                if (l.2 - n.2).abs() > 1 {
+                                    continue;
+                                }
+                                let dx = (l.1 - n.1).abs();
+                                assert!(
+                                    dx >= 2,
+                                    "{w}x{h} {name} ascii={ascii}: lid {l:?} touches nose {n:?}"
+                                );
+                            }
+                            // fur between the lid and the nearest nose cell on the lid's row
+                            let near = nose.iter().min_by_key(|n| (n.1 - l.1).abs()).unwrap();
+                            let (x0, x1) = if l.1 < near.1 {
+                                (l.1, near.1)
+                            } else {
+                                (near.1, l.1)
+                            };
+                            let between: Vec<_> = (x0 + 1..x1)
+                                .filter(|&x| !lids.iter().any(|m| m.1 == x && m.2 == l.2))
+                                .collect();
+                            if (l.2 - near.2).abs() <= 1 {
+                                assert!(!between.is_empty(), "{w}x{h} {name}: no gap");
+                            }
+                            for x in between {
+                                let c = at(x, l.2);
+                                assert!(
+                                    c.fg.is_some() && c.ch != '\u{2580}',
+                                    "{w}x{h} {name}: no fur at {x},{}",
+                                    l.2
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

@@ -980,8 +980,12 @@ fn draw_sit_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
     let (mv, mru, mrv) = (hv - hrv * 0.42, hru * 0.38, (hrv * 0.36).max(1.0));
     let hu = hu + fo;
     r.ell(cv, (hu, mv), (mru, mrv), &|_, _, _, _| ('\u{2588}', muz));
-    r.stamp(cv, hu - 0.5, mv + mrv * 0.55, '\u{2588}', b.nose);
-    r.stamp(cv, hu + 0.5, mv + mrv * 0.55, '\u{2588}', b.nose);
+    let nv = mv + mrv * 0.55;
+    r.stamp(cv, hu - 0.5, nv, '\u{2588}', b.nose);
+    r.stamp(cv, hu + 0.5, nv, '\u{2588}', b.nose);
+    // the nose's screen columns and row (the nap keeps the lids clear of it)
+    let (nx0, ny) = r.xy(hu - 0.5, r.fv(nv));
+    let nx1 = r.xy(hu + 0.5, r.fv(nv)).0;
     if p.open > 0.15 || p.tongue > 0.3 {
         let m = (0x70, 0x20, 0x30);
         r.stamp(cv, hu - 0.5, mv - mrv + 0.2, '\u{2584}', m);
@@ -992,9 +996,13 @@ fn draw_sit_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
         }
     }
     // big wide-set eyes with a shine, rosy cheeks; eyes follow the look direction
-    let ex = (0.5 * hru).max(2.0) * squeeze;
+    // eye offset snapped to half columns so both eyes land on the same cell grid offset
+    // (otherwise one eye's ellipse samples a cell fewer than the other)
+    let ex = ((0.5 * hru).max(2.0) * squeeze * 2.0).round() / 2.0;
     let ev = hv + 0.12 * hrv;
-    let shift = 0.5 * face;
+    let nap = body.closed && (body.scale - NAP_SCALE).abs() < 0.01;
+    // asleep the eyes look nowhere: centred on the face
+    let shift = if nap { 0.0 } else { 0.5 * face };
     let dark = (0x18, 0x12, 0x14);
     let iris = if b.eye.0 as u32 + b.eye.1 as u32 + b.eye.2 as u32 > 200 {
         b.eye
@@ -1003,7 +1011,6 @@ fn draw_sit_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
     };
     for s in [-1.0f32, 1.0] {
         let eu = hu + s * ex + shift;
-        let nap = body.closed && (body.scale - NAP_SCALE).abs() < 0.01;
         if nap {
             // asleep: a dark `u` lid line per eye, 3 cells on a wide head, 2, or one
             let wide = if ex >= 3.0 {
@@ -1024,22 +1031,63 @@ fn draw_sit_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
             } else {
                 &[(0.0, '\u{2580}', 'u')]
             };
-            // no cell background: put fur above and below so the dark lid has fur around it
-            let fur = shade(b.coat, 0.0);
-            for &(du, _, _) in cells {
-                for dv in [-1.0f32, 1.0] {
-                    r.stamp(cv, eu + du, ev + dv, '\u{2588}', fur);
+            // screen columns of the lid; on a small head it is pushed outward so at least
+            // one fur column stays between the lid and the nose
+            let (_, ey) = r.xy(eu, r.fv(ev));
+            let mut cols: Vec<(i32, char, char)> = cells
+                .iter()
+                .map(|&(du, ch, a)| (r.xy(eu + du, r.fv(ev)).0, ch, a))
+                .collect();
+            if (ey - ny).abs() <= 1 {
+                let lo = cols.iter().map(|c| c.0).min().unwrap_or(0);
+                let hi = cols.iter().map(|c| c.0).max().unwrap_or(0);
+                let (a0, a1) = (nx0.min(nx1), nx0.max(nx1));
+                let d = if s < 0.0 {
+                    -(hi - (a0 - 2)).max(0)
+                } else {
+                    (a1 + 2 - lo).max(0)
+                };
+                for c in cols.iter_mut() {
+                    c.0 += d;
                 }
             }
-            for &(du, ch, a) in cells {
-                r.stamp(
-                    cv,
-                    eu + du,
-                    ev,
+            // no cell background: put fur above and below so the dark lid has fur around it
+            let fur = shade(b.coat, 0.0);
+            for &(x, _, _) in &cols {
+                for dy in [-1, 1] {
+                    if (ey + dy - ny).abs() > 0 || x < nx0.min(nx1) || x > nx0.max(nx1) {
+                        cv.put(x, ey + dy, '\u{2588}', fur);
+                    }
+                }
+            }
+            // and fur between the lid and the nose on the lid's row
+            if (ey - ny).abs() <= 1 {
+                let (a0, a1) = (nx0.min(nx1), nx0.max(nx1));
+                for &(x, _, _) in &cols {
+                    let gap = if s < 0.0 { x + 1..a0 } else { a1 + 1..x };
+                    for gx in gap {
+                        if gx != x {
+                            cv.put(gx, ey, '\u{2588}', fur);
+                        }
+                    }
+                }
+            }
+            for &(x, ch, a) in &cols {
+                cv.put(
+                    x,
+                    ey,
                     if cv.ascii { a } else { ch },
                     if cv.ascii { dark } else { fur },
                 );
+                #[cfg(test)]
+                NAP_FACE.with(|f| f.borrow_mut().push((0, x, ey)));
             }
+            #[cfg(test)]
+            NAP_FACE.with(|f| {
+                let mut f = f.borrow_mut();
+                f.push((1, nx0, ny));
+                f.push((1, nx1, ny));
+            });
         } else if body.closed || body.blink {
             // closed lid: the cell is lid skin with a thin dark gap along its top edge (the lash line), so
             // it reads as a slit under a lid, not a hole; one `-` per eye in ascii
@@ -1051,7 +1099,14 @@ fn draw_sit_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
         } else {
             let (eru, erv) = ((0.11 * hru).max(1.0), (0.13 * hrv).max(1.0));
             r.ell(cv, (eu, ev), (eru, erv), &|_, _, _, _| ('\u{2588}', iris));
-            r.stamp(cv, eu - 0.4, ev + erv * 0.6, '\u{25cf}', (255, 255, 255));
+            // the shine toward the outer corner, so the two eyes are mirror images
+            r.stamp(
+                cv,
+                eu + s * 0.4,
+                ev + erv * 0.6,
+                '\u{25cf}',
+                (255, 255, 255),
+            );
         }
         r.stamp(
             cv,
@@ -1075,6 +1130,13 @@ fn draw_sit_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
 }
 
 // ------------------------------------------------------------ the seated head, anywhere
+
+#[cfg(test)]
+thread_local! {
+    /// Screen cells of the napping dog's lids (0) and nose (1) since the last clear.
+    pub(crate) static NAP_FACE: std::cell::RefCell<Vec<(u8, i32, i32)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
 
 /// One head, drawn alone: cells relative to the head's centre cell.
 type Sprite = Vec<(i32, i32, Cell)>;
