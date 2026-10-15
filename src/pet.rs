@@ -92,6 +92,11 @@ pub trait Pet: Sync {
     fn visit_scale(&self, _app: &App, target: f32) -> f32 {
         target
     }
+    /// Column the host settles at during a visit, given its evenly spaced slot `x`, so e.g.
+    /// the full-size dog stays on the pane. `x` by default.
+    fn host_x(&self, _app: &App, x: f32) -> f32 {
+        x
+    }
     /// Column a guest of kind `guest` settles at, given its evenly spaced slot `x`, so e.g.
     /// a visiting squid floats on the open lawn instead of over the doghouse.
     fn guest_x(&self, _app: &App, _guest: Kind, x: f32) -> f32 {

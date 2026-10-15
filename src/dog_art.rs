@@ -33,13 +33,16 @@ fn hash(x: i32, y: i32) -> u32 {
 
 // ------------------------------------------------------------ layout
 
-/// (feet row, top row of the fence). The dog's feet touch row `feet - 1`.
+/// (feet row, top row of the fence). The dog's feet touch row `feet - 1`, the cat's paw
+/// row in a same-size pane (`geo_cat`: top row 3, about 68% of the rows tall), so a dog and
+/// a cat side by side sit level.
 pub fn ground(w: u16, h: u16) -> (i32, i32) {
     let _ = w;
+    let cat = (h as f32 * 0.68).round() as i32;
     let h = h as i32;
     let fh = if h < 20 { 2 } else { 4 };
     let fence_top = h - 2 - fh;
-    let feet = (h - 3).max(5);
+    let feet = (3 + cat).min(h - 3).max(5);
     (feet, fence_top)
 }
 

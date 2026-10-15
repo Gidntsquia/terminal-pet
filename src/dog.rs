@@ -758,11 +758,26 @@ impl App {
         if gx + 1.0 >= dog_left as f32 {
             return;
         }
+        // the dog may stand somewhere else once the guest is gone (it keeps clear of
+        // guests): only columns left of the dog in both scenes count
+        let drawn_left = |app: &App| {
+            let mut cv = crate::art::Canvas::new(app.w, app.h, false);
+            crate::dog_art::draw_dog(&mut cv, &app.host_body());
+            (0..cv.w)
+                .find(|&x| (0..cv.h).any(|y| cv.cells[y * cv.w + x].fg.is_some()))
+                .unwrap_or(cv.w)
+        };
         let with = crate::art::render(self, false);
+        let left_with = drawn_left(self);
         self.guests[i].x = -10_000.0;
         let without = crate::art::render(self, false);
+        let left_without = drawn_left(self);
         self.guests[i].x = x0;
-        let n = dog_left.saturating_sub(1).min(with.w);
+        let n = dog_left
+            .min(left_with)
+            .min(left_without)
+            .saturating_sub(1)
+            .min(with.w);
         let changed = |x: usize| {
             (0..with.h).any(|y| {
                 let k = y * with.w + x;
@@ -1128,9 +1143,19 @@ fn guest_reach(app: &App, kind: Kind) -> (f32, f32) {
     (half, half)
 }
 
+/// A guest's drawn width (columns, at the current scale), from the half that faces away
+/// from the dog: the measured half towards the dog can run into the dog's own cells.
+fn guest_span(app: &App, g: &Guest) -> f32 {
+    let (l, r) = guest_reach(app, g.kind);
+    2.0 * if g.side < 0.0 { l } else { r }
+}
+
 /// How far (in seated widths, `seat_dims().0`) the seated dog reaches from its centre to
 /// the left (floppy ears and paws); the tail reaches a little further right.
 const SEAT_REACH: f32 = 0.65;
+
+/// Half the seated dog's whole drawn width (ears, paws and tail), in seated widths.
+const DOG_REACH: f32 = 0.72;
 
 fn guest_half_estimate(app: &App, kind: Kind) -> f32 {
     if kind == Kind::Squid {
@@ -1414,8 +1439,38 @@ impl Pet for DogPet {
         let hi = (dog_x - SEAT_REACH * ww - r - 1.0).max(x);
         (x + dx).clamp(lo, hi) - x
     }
-    fn visit_scale(&self, _app: &App, target: f32) -> f32 {
-        target
+    fn visit_scale(&self, app: &App, target: f32) -> f32 {
+        // the dog and its guests keep their solo size while they fit side by side across
+        // the pane; only a crowd shrinks, and never below the engine's `target`
+        let k = app.scale.max(0.05);
+        let (ww, _) = crate::dog_art::seat_dims(app.w, app.h, 1.0);
+        let mut need = 2.0 * DOG_REACH * ww;
+        for g in &app.guests {
+            need += guest_span(app, g) / k + 2.0;
+        }
+        let room = app.w as f32 - 2.0;
+        (room / need).min(1.0).max(target)
+    }
+    fn host_x(&self, app: &App, x: f32) -> f32 {
+        // keep the seated dog on the pane with room for the guests on each side of it
+        let (ww, _) = crate::dog_art::seat_dims(app.w, app.h, app.scale);
+        let half = DOG_REACH * ww;
+        let (mut left, mut right) = (0.0, 0.0);
+        for g in &app.guests {
+            let span = guest_span(app, g) + 1.0;
+            if g.side < 0.0 {
+                left += span;
+            } else {
+                right += span;
+            }
+        }
+        let lo = 1.0 + left + half;
+        let hi = app.w as f32 - 2.0 - right - half;
+        if lo <= hi {
+            x.clamp(lo, hi)
+        } else {
+            (lo + hi) / 2.0
+        }
     }
 
     fn stage(&self, app: &App) -> (f32, f32) {
@@ -2110,6 +2165,46 @@ mod tests {
             hello(&mut a, 2, false);
         }
         a
+    }
+
+    #[test]
+    fn a_cat_visiting_at_split_size_shrinks_nobody() {
+        // the user's split panes: the dog keeps its solo size, the cat is about 3/4 of it
+        for (w, h) in [(65u16, 23u16), (86, 22)] {
+            let a = guest_of(w, h, 6.0, Msg::ArriveCat(0));
+            assert_eq!(a.guests.len(), 1);
+            assert!(a.scale > 0.99, "{w}x{h}: visit scale {}", a.scale);
+            let (fit, _) = a.guest_fit(Kind::Cat);
+            let (_, dog_h) = crate::dog_art::seat_dims(w, h, a.scale);
+            let cat_h = h as f32 * 0.68 * a.scale * fit;
+            let k = cat_h / dog_h;
+            assert!((0.68..=0.82).contains(&k), "{w}x{h}: guest/dog height {k}");
+        }
+    }
+
+    #[test]
+    fn seated_dog_is_level_with_the_cat() {
+        // same-size panes: the dog's drawn top and paw rows match the cat's (top row 3,
+        // paws at 3 + 68% of the rows)
+        for (w, h) in [(65u16, 23u16), (86, 22), (60, 28), (80, 40), (122, 56)] {
+            let a = dog(w, h, 5);
+            let mut cv = crate::art::Canvas::new(w, h, false);
+            crate::dog_art::draw_dog(&mut cv, &a.host_body());
+            let row = |y: usize| (0..cv.w).any(|x| cv.cells[y * cv.w + x].fg.is_some());
+            let top = (0..cv.h).find(|&y| row(y)).unwrap() as i32;
+            let bottom = (0..cv.h).rev().find(|&y| row(y)).unwrap() as i32;
+            let cat = crate::cat_art::geo_cat(w, h, 1.0);
+            let cat_bottom = cat.top + cat.mh + cat.hh + cat.al - 1;
+            assert!(
+                (top - cat.top).abs() <= 1,
+                "{w}x{h}: dog top {top} cat {}",
+                cat.top
+            );
+            assert!(
+                (bottom - cat_bottom).abs() <= 1,
+                "{w}x{h}: dog bottom {bottom} cat {cat_bottom}"
+            );
+        }
     }
 
     #[test]

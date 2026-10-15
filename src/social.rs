@@ -763,6 +763,7 @@ impl App {
             let sx = s0 + (s1 - s0) * (k as f32 + 0.5) / n as f32;
             match who {
                 None => {
+                    let sx = self.pet().map_or(sx, |p| p.host_x(self, sx));
                     let target = if n == 1 { 0.0 } else { sx - cx };
                     self.host_dx += (target - self.host_dx) * (1.0 - (-6.0 * dt).exp());
                     if (target - self.host_dx).abs() < 0.01 {
