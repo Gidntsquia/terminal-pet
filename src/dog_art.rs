@@ -59,7 +59,7 @@ pub fn seat_dims(w: u16, h: u16, scale: f32) -> (f32, f32) {
     let feet = ground(w, h).0;
     let frac = 0.70 + 0.11 * ((38.0 - h as f32) / 10.0).clamp(0.0, 1.0);
     let hh = ((h as f32 * frac * scale).round() as i32).clamp(6, (feet - 2).max(6)) as f32;
-    let wide = 1.2 + 0.25 * ((40.0 - h as f32) / 18.0).clamp(0.0, 1.0);
+    let wide = 1.2 + 0.3 * ((40.0 - h as f32) / 18.0).clamp(0.0, 1.0);
     let ww = (hh * wide).min(w as f32 * 0.45).max(8.0);
     (ww, hh)
 }

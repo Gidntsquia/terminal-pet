@@ -1784,6 +1784,63 @@ mod tests {
         out
     }
 
+    /// (rows, columns, top row, bottom row) of the cells drawn with owner id 1.
+    fn extent(cells: &[(i32, i32)]) -> (i32, i32, i32, i32) {
+        let top = cells.iter().map(|c| c.1).min().unwrap();
+        let bottom = cells.iter().map(|c| c.1).max().unwrap();
+        let l = cells.iter().map(|c| c.0).min().unwrap();
+        let r = cells.iter().map(|c| c.0).max().unwrap();
+        (bottom - top + 1, r - l + 1, top, bottom)
+    }
+
+    #[test]
+    fn seated_dog_is_at_least_the_cat_and_level_with_it() {
+        for (w, h) in [
+            (65u16, 23u16),
+            (86, 22),
+            (60, 28),
+            (80, 24),
+            (120, 40),
+            (122, 56),
+        ] {
+            let a = seated_dog(w, h, 0);
+            let d = extent(&dog_cells(&a));
+            let mut c = App::new(w, h, 1);
+            c.init_cat();
+            c.init_color(0, false);
+            let mut cv = crate::art::Canvas::new(w, h, false);
+            crate::cat_art::draw_cat_into(&mut cv, &c.host_body(), false, 1, w, h);
+            let mut cells = vec![];
+            for y in 0..cv.h {
+                for x in 0..cv.w {
+                    if cv.owner[y * cv.w + x] == 1 {
+                        cells.push((x as i32, y as i32));
+                    }
+                }
+            }
+            let k = extent(&cells);
+            eprintln!(
+                "{w}x{h}: dog {d:?} cat {k:?} seat {:?}",
+                crate::dog_art::seat_dims(w, h, 1.0)
+            );
+            // heights match the cat's; widths are the seated body (`seat_dims`), compared with
+            // the cat body widths the spec measured (whiskers and tail left out)
+            assert!(d.0 + 1 >= k.0, "{w}x{h}: dog {d:?} cat {k:?}");
+            let (ww, _) = crate::dog_art::seat_dims(w, h, 1.0);
+            let min_w = match (w, h) {
+                (86, 22) => 24.0,
+                (60, 28) => 27.0,
+                (122, 56) => 44.0,
+                _ => 0.0,
+            };
+            assert!(ww >= min_w - 0.5, "{w}x{h}: seated width {ww} < {min_w}");
+            assert!(
+                (d.2 - k.2).abs() <= 1 && (d.3 - k.3).abs() <= 1,
+                "{w}x{h}: not level dog {d:?} cat {k:?}"
+            );
+        }
+    }
+
     fn seated_dog(w: u16, h: u16, breed: usize) -> App {
         let mut a = dog(w, h, 1);
         a.init_color(breed, false);
