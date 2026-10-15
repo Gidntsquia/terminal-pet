@@ -53,10 +53,11 @@ pub fn horizon(w: u16, h: u16) -> i32 {
 /// Seated dog: (width in columns, height in rows). Height follows the pane rows like the
 /// cat's `geo_cat`; width follows the height but never more than a third of the pane.
 pub fn seat_dims(w: u16, h: u16, scale: f32) -> (f32, f32) {
-    // the dog's size is unchanged from when its feet stood at 70% of the pane
-    let old_feet = ((h as f32 * 0.70).round() as i32).max(5);
-    let hh = ((h as f32 * 0.68 * scale).round() as i32).clamp(6, (old_feet - 2).max(6)) as f32;
-    let ww = (hh * 1.2).min(w as f32 * 0.32).max(8.0);
+    let feet = ground(w, h).0;
+    let frac = 0.70 + 0.11 * ((38.0 - h as f32) / 10.0).clamp(0.0, 1.0);
+    let hh = ((h as f32 * frac * scale).round() as i32).clamp(6, (feet - 2).max(6)) as f32;
+    let wide = 1.2 + 0.25 * ((40.0 - h as f32) / 18.0).clamp(0.0, 1.0);
+    let ww = (hh * wide).min(w as f32 * 0.45).max(8.0);
     (ww, hh)
 }
 

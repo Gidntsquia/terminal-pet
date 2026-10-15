@@ -51,7 +51,7 @@ NO_COLOR=1 terminal-pet                     # Monochrome
 - The cat bats treats, chases a laser dot, purrs when stroked, and swings its tail as your mouse crosses it.
 - The dog catches biscuits, fetches a ball, digs, naps in its doghouse and barks. Pick one of its 11 breeds (including dachshund, bluey and bingo) with `--pet dog --breed <name>`.
 - Cats come in 12 breeds and squid in eight colors. Press `c` to change while it runs.
-- Pets visit each other every 20-30 minutes, or when you press `v`, and play chase, high-five and tag.
+- Pets visit each other every 20-30 minutes, or when you press `v`, and play chase, high-five and tag. In a dog's yard guests may stand in front of the doghouse or tree and are about 3/4 of the dog's height.
 - A squid that gets a toy mouse from a cat jumps and puffs up. A cat that gets inked sneezes it off. A dog's bark makes a cat arch and a squid jet away.
 - Feed, pet and play stack: pressing them together or repeatedly layers the reactions.
 - Uses truecolor when the terminal supports it and falls back to 256 colors.
