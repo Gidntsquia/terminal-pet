@@ -1000,7 +1000,7 @@ fn draw_sit_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
     // (otherwise one eye's ellipse samples a cell fewer than the other)
     let ex = ((0.5 * hru).max(2.0) * squeeze * 2.0).round() / 2.0;
     let ev = hv + 0.12 * hrv;
-    let nap = body.closed && (body.scale - NAP_SCALE).abs() < 0.01;
+    let nap = body.closed;
     // asleep the eyes look nowhere: centred on the face
     let shift = if nap { 0.0 } else { 0.5 * face };
     let dark = (0x18, 0x12, 0x14);
@@ -2270,12 +2270,7 @@ fn inside_body(body: &Body, w: u16, h: u16) -> Body {
     };
     b2.closed = true;
     b2.blink = false;
-    b2.scale = NAP_SCALE;
-    let (_, hn) = seat_dims(w, h, NAP_SCALE);
-    // the chin sits 0.565 of the seated height above the feet row
-    b2.dy = lift + 0.565 * hn - 0.5;
-    b2.cx = 0;
-    b2.dx = door_x(w, h);
+    let _ = (w, h, lift);
     b2
 }
 
@@ -2284,18 +2279,16 @@ fn draw_inside(cv: &mut Canvas, body: &Body) {
     draw_sit(cv, &inside_body(body, w, h));
 }
 
-/// Zzz drifting up from the roof top of the doghouse the dog naps in.
+/// Zzz drifting up from the napping dog's head.
 fn draw_zzz(cv: &mut Canvas, body: &Body, w: u16, h: u16) {
-    let (x0, hw, wall, roof) = house(w, h);
-    let base = horizon(w, h) - 1;
-    let top = base - wall - roof;
-    let cx = x0 + hw / 2;
+    let r = sit_rig(body, w, h);
+    let (hx, hy) = r.xy(r.hu + 0.6 * r.hru, r.hv + r.hrv);
     for i in 0..3 {
         let k = (body.t / 1.5 + i as f32 * 0.33) % 1.0;
         let ch = ['z', 'Z', 'z'][i as usize];
         cv.put(
-            cx + (k * 4.0) as i32 + i * 2,
-            top - (k * 4.0) as i32 - i,
+            hx + (k * 4.0) as i32 + i * 2,
+            hy - 1 - (k * 4.0) as i32 - i,
             ch,
             ZZZ,
         );
@@ -2334,7 +2327,7 @@ pub fn draw_dog_into(cv: &mut Canvas, body: &Body, _mono: bool, id: u8, w: u16, 
     let (x0, _, _, _) = house(w, h);
     // walking into the house hides the body behind its walls and roof; asleep inside,
     // only what the door frames shows
-    let hide = p.nap > 0.0 || p.inside;
+    let hide = false;
     for y in 0..sc.h {
         for x in 0..sc.w {
             let c = sc.cells[y * sc.w + x];
@@ -2349,9 +2342,6 @@ pub fn draw_dog_into(cv: &mut Canvas, body: &Body, _mono: bool, id: u8, w: u16, 
                 continue;
             }
             // asleep inside: nothing pokes out past the door (tail, paws)
-            if p.inside && !in_door(w, h, xi, yi) {
-                continue;
-            }
             // asleep: everything at about half brightness
             let c = if p.inside {
                 Cell {

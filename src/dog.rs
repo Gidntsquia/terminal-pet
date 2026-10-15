@@ -325,7 +325,6 @@ impl DogPose {
             || self.dig > 0.0
             || self.crouch > 0.0
             || self.roll > 0.0
-            || self.nap > 0.0
             || self.carry == 2
             || self.spin.abs() < 0.999)
     }
@@ -601,12 +600,8 @@ impl App {
     }
 
     fn dog_nap_dx(&self) -> f32 {
-        if self.dog.nap_k <= 0.0 {
-            return 0.0;
-        }
-        let door = crate::dog_art::door_x(self.w, self.h);
-        let base = self.geo().cx as f32 + self.dog_seat_dx() + self.dog_play_dx();
-        (door - base) * ease(self.dog.nap_k)
+        // the dog naps where it sits, at its full size
+        0.0
     }
 
     /// Offset of the dog's resting spot: the idle drift, the guest layout shift and the
@@ -907,8 +902,7 @@ impl App {
         let t = self.t;
         let mut p = DogPose {
             // walks its bursts, and walks to the doghouse door and back out for a nap
-            walking: self.burst.2 < BURST && self.home_ox() == 0.0 && self.dog.nap_k <= 0.0
-                || self.dog.nap_k > 0.0 && self.dog.nap_k < 1.0,
+            walking: self.burst.2 < BURST && self.home_ox() == 0.0 && self.dog.nap_k <= 0.0,
             step: t * 9.0,
             wag_ph: t * 14.0,
             fast_ph: t * 30.0,
@@ -1065,10 +1059,7 @@ impl App {
     /// Draw data for the host dog.
     pub fn dog_host_body(&self) -> Body {
         let g = self.geo();
-        let (dx, mut dy) = self.offset();
-        dy += (crate::dog_art::horizon(self.w, self.h) - crate::dog_art::ground(self.w, self.h).0)
-            as f32
-            * ease(self.dog.nap_k.clamp(0.0, 1.0));
+        let (dx, dy) = self.offset();
         let pose = self.dog_pose();
         Body {
             kind: Kind::Dog,
@@ -1084,8 +1075,7 @@ impl App {
             cx: g.cx,
             dx,
             dy,
-            scale: self.scale
-                * (1.0 - (1.0 - crate::dog_art::NAP_SCALE) * ease(self.dog.nap_k.clamp(0.0, 1.0))),
+            scale: self.scale,
             blush: self.blush(),
             flash: self.flash(),
             bright: self.fx.bright,
@@ -1449,7 +1439,10 @@ impl Pet for DogPet {
             need += guest_span(app, g) / k + 2.0;
         }
         let room = app.w as f32 - 2.0;
-        (room / need).min(1.0).max(target)
+        // small overlaps are not worth a size change: stay full size unless it clearly
+        // does not fit, so the dog never flickers between sizes as a guest moves
+        let fit = room / need;
+        (if fit >= 0.85 { 1.0 } else { fit }).min(1.0).max(target)
     }
     fn host_x(&self, app: &App, x: f32) -> f32 {
         // keep the seated dog on the pane with room for the guests on each side of it
@@ -1722,48 +1715,48 @@ mod tests {
     }
 
     #[test]
-    fn nap_goes_into_the_doghouse() {
+    fn nap_sleeps_in_place_at_full_size() {
         let mut a = dog(120, 40, 1);
         a.state = State::IdleBehavior(Behavior::Nap);
         a.st = 0.0;
-        let door = crate::dog_art::door_x(120, 40);
-        for i in 0..60 {
+        let before = extent(&dog_cells(&a));
+        let x0 = a.geo().cx as f32 + a.offset().0;
+        for _ in 0..60 {
             a.update(1.0 / 16.0);
-            let _ = i;
+            assert!((a.dog_host_body().scale - 1.0).abs() < 0.001);
         }
         assert!(a.dog.nap_k >= 1.0);
-        assert!((a.geo().cx as f32 + a.offset().0 - door).abs() < 1.0);
+        assert!((a.geo().cx as f32 + a.offset().0 - x0).abs() < 4.0);
         assert!(a.dog_pose().inside);
+        let after = extent(&dog_cells(&a));
+        assert!(
+            after.0 + 1 >= before.0,
+            "napping dog shorter: {before:?} {after:?}"
+        );
     }
 
     #[test]
-    fn nap_walk_shrinks_and_feeding_wakes_the_dog_before_it_eats() {
+    fn nap_keeps_its_size_and_feeding_wakes_the_dog_before_it_eats() {
         let mut a = dog(120, 40, 1);
         a.state = State::IdleBehavior(Behavior::Nap);
         a.st = 0.0;
         a.dog_start_idle(Behavior::Nap);
-        let mut min_mid = 1.0f32;
         for _ in 0..30 {
             a.update(1.0 / 16.0);
             let sc = a.dog_host_body().scale;
-            if a.dog.nap_k > 0.2 && a.dog.nap_k < 0.9 {
-                min_mid = min_mid.min(sc);
-            }
+            assert!((sc - 1.0).abs() < 0.01, "changed size on the way in: {sc}");
         }
-        assert!(min_mid < 0.9, "no shrink on the way in: {min_mid}");
         for _ in 0..40 {
             a.update(1.0 / 16.0);
         }
         assert!(a.dog_pose().inside);
-        assert!((a.dog_host_body().scale - crate::dog_art::NAP_SCALE).abs() < 0.01);
+        assert!((a.dog_host_body().scale - 1.0).abs() < 0.01);
         a.press(Key::Feed);
-        let mut grew = false;
         for _ in 0..80 {
             a.update(1.0 / 16.0);
             let sc = a.dog_host_body().scale;
-            grew |= a.dog.nap_k > 0.0 && a.dog.nap_k < 1.0 && sc > crate::dog_art::NAP_SCALE;
+            assert!((sc - 1.0).abs() < 0.01, "changed size on the way out: {sc}");
         }
-        assert!(grew, "did not grow on the way out");
         assert_eq!(a.dog.nap_k, 0.0);
         assert!((a.dog_host_body().scale - 1.0).abs() < 0.01);
         assert!(a.stats.fed >= 1, "never ate");
@@ -1931,9 +1924,11 @@ mod tests {
     }
 
     #[test]
-    fn asleep_in_the_doghouse_the_door_frames_the_dog() {
+    fn asleep_the_dog_is_as_tall_as_when_seated() {
         use crate::dog_art as da;
         for (w, h) in YARD_SIZES {
+            let seated = seated_dog(w, h, 0);
+            let sit = extent(&dog_cells(&seated));
             let mut a = dog(w, h, 1);
             a.state = State::IdleBehavior(Behavior::Nap);
             a.st = 0.0;
@@ -1942,30 +1937,12 @@ mod tests {
                 a.update(1.0 / 16.0);
             }
             assert!(a.dog_pose().inside, "{w}x{h}");
-            // only the head shows, inside the door, no lower than its floor row
-            let base = da::horizon(w, h) - 1;
-            let cells = dog_cells(&a);
-            assert!(cells.len() > 10, "{w}x{h}: head missing");
-            let (_, hd) = da::seat_dims(w, h, da::NAP_SCALE);
-            for c in &cells {
-                assert!(
-                    da::in_door(w, h, c.0, c.1),
-                    "{w}x{h}: ({},{}) outside the door",
-                    c.0,
-                    c.1
-                );
-                assert!(c.1 <= base);
-            }
-            let top = cells.iter().map(|c| c.1).min().unwrap();
-            let bot = cells.iter().map(|c| c.1).max().unwrap();
+            let nap = extent(&dog_cells(&a));
             assert!(
-                bot >= base - 1,
-                "{w}x{h}: chin not on the floor ({bot} vs {base})"
+                (nap.0 - sit.0).abs() <= 1 && (nap.1 - sit.1).abs() <= 2,
+                "{w}x{h}: napping {nap:?} vs seated {sit:?}"
             );
-            assert!(
-                ((bot - top + 1) as f32) < 0.8 * hd,
-                "{w}x{h}: more than a head"
-            );
+            let _ = da::NAP_SCALE;
         }
     }
 
