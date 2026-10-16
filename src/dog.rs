@@ -2991,7 +2991,7 @@ mod tests {
                 body.closed = false;
                 body.blink = false;
                 let [l, r] = eye_cells(&body, w, h);
-                // the same size: equal cell counts, and the iris outlines are mirror images
+                // the same size: equal cell counts, and the same outline (shine up-left in both)
                 assert_eq!(
                     l.len(),
                     r.len(),
@@ -3004,9 +3004,9 @@ mod tests {
                     r.iter().map(|c| c.0).max().unwrap() - r.iter().map(|c| c.0).min().unwrap();
                 assert_eq!(lw, rw, "{w}x{h} {}: eye widths", br.name);
                 assert_eq!(
-                    norm(&l, true),
+                    norm(&l, false),
                     norm(&r, false),
-                    "{w}x{h} {}: eyes mirror",
+                    "{w}x{h} {}: eyes identical",
                     br.name
                 );
             }

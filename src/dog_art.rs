@@ -1099,14 +1099,8 @@ fn draw_sit_head(r: &Rig, cv: &mut Canvas, body: &Body, hh: f32) {
         } else {
             let (eru, erv) = ((0.11 * hru).max(1.0), (0.13 * hrv).max(1.0));
             r.ell(cv, (eu, ev), (eru, erv), &|_, _, _, _| ('\u{2588}', iris));
-            // the shine toward the outer corner, so the two eyes are mirror images
-            r.stamp(
-                cv,
-                eu + s * 0.4,
-                ev + erv * 0.6,
-                '\u{25cf}',
-                (255, 255, 255),
-            );
+            // the shine up-left in both eyes (one light source), as before the eye-size fix
+            r.stamp(cv, eu - 0.4, ev + erv * 0.6, '\u{25cf}', (255, 255, 255));
         }
         r.stamp(
             cv,
